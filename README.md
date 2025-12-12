@@ -86,6 +86,82 @@ You've successfully run and modified your React Native App. :partying_face:
 
 If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
 
+# RollTracks Features
+
+## Supabase Cloud Integration
+
+RollTracks includes optional cloud synchronization using Supabase for multi-device access and data backup.
+
+### Quick Setup
+
+1. **Create Supabase Project**
+   - Sign up at https://supabase.com
+   - Create a new project
+   - Get your Project URL and anon key from Settings → API
+
+2. **Configure Environment**
+   ```bash
+   # Create .env file in project root
+   SUPABASE_URL=https://your-project-id.supabase.co
+   SUPABASE_ANON_KEY=your-anon-key-here
+   ```
+
+3. **Apply Database Migrations**
+   - Go to Supabase Dashboard → SQL Editor
+   - Run each migration file from `supabase/migrations/` in order
+   - See [docs/SupabaseSetup.md](docs/SupabaseSetup.md) for detailed instructions
+
+4. **Install Dependencies**
+   ```bash
+   npm install
+   ```
+
+### Features
+
+- **Offline-First**: App works fully offline, syncs when online
+- **Authentication**: Display name + password (no email required)
+- **Privacy**: Display names excluded from research data exports
+- **Row-Level Security**: Users can only access their own data
+- **Background Sync**: Automatic sync when network available
+- **File Uploads**: Photos and GPS tracks stored securely
+- **Multi-Device**: Login from multiple devices with same account
+
+### Offline Mode
+
+If Supabase is not configured, the app runs in offline-only mode:
+- All data stored locally on device
+- No cloud sync or multi-device support
+- Full functionality for single-device use
+
+For complete setup instructions, see [docs/SupabaseSetup.md](docs/SupabaseSetup.md)
+
+## Map Visualization
+
+RollTracks includes real-time map visualization during active trips using Leaflet.js with offline tile support.
+
+### Map Tiles Setup
+
+The app bundles offline map tiles as Android assets. Before building:
+
+1. Ensure tiles exist at: `C:\MobilityTripTracker1\MapData\sf_tiles\`
+2. Run: `npm run copy-tiles`
+3. Build: `npm run android`
+
+The tiles will be automatically included in the APK. No manual device setup required!
+
+### Map Features
+
+- **Offline Support**: Works without internet connection using local tiles
+- **Real-time Tracking**: Shows current GPS location with accuracy circle
+- **Route Visualization**: Draws traveled route as a blue polyline
+- **Interactive**: Pan, zoom, and re-center on current location
+- **Performance Optimized**: GPS throttling, polyline simplification, and tile caching
+- **Pause/Resume**: Route drawing stops when trip is paused
+
+### Component Documentation
+
+For detailed MapView component documentation, see [docs/MapView.md](docs/MapView.md)
+
 # Learn More
 
 To learn more about React Native, take a look at the following resources:

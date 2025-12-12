@@ -73,3 +73,13 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Environment variables
+.env
+src/config/supabase.config.ts
+
+# Map tiles (large files - regenerate with npm run copy-tiles)
+android/app/src/main/assets/sf_tiles/
+
+# Supabase config with credentials
+src/config/supabase.config.ts

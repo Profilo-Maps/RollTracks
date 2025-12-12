@@ -77,13 +77,18 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.mobilitytriptracker"
+    namespace "com.rolltracks"
     defaultConfig {
-        applicationId "com.mobilitytriptracker"
+        applicationId "com.rolltracks"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+    }
+    sourceSets {
+        main {
+            assets.srcDirs = ['src/main/assets']
+        }
     }
     signingConfigs {
         debug {
