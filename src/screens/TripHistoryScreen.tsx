@@ -44,12 +44,13 @@ export const TripHistoryScreen: React.FC<TripHistoryScreenProps> = ({ route }) =
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [highlightedTripId, setHighlightedTripId] = useState<string | null>(null);
+  const [ratedFeaturesCounts, setRatedFeaturesCounts] = useState<Record<string, number>>({});
   
   // Ref for FlatList to enable scrolling to specific trip
   const flatListRef = useRef<FlatList<Trip>>(null);
 
   // Get services from context
-  const { tripService, storageAdapter } = useServices();
+  const { tripService, storageAdapter, ratingService } = useServices();
 
   // Extract highlightTripId from route params
   const { highlightTripId } = route.params || {};
@@ -96,6 +97,21 @@ export const TripHistoryScreen: React.FC<TripHistoryScreenProps> = ({ route }) =
     try {
       const data = await tripService.getTrips();
       setTrips(data);
+      
+      // Load rated features counts for all trips
+      const counts: Record<string, number> = {};
+      await Promise.all(
+        data.map(async (trip) => {
+          try {
+            const ratings = await ratingService.getRatingsForTrip(trip.id);
+            counts[trip.id] = ratings.length;
+          } catch (err) {
+            console.error(`Error loading ratings for trip ${trip.id}:`, err);
+            counts[trip.id] = 0;
+          }
+        })
+      );
+      setRatedFeaturesCounts(counts);
     } catch (fetchError: any) {
       const appError = handleError(fetchError);
       setError(appError.message);
@@ -131,6 +147,21 @@ export const TripHistoryScreen: React.FC<TripHistoryScreenProps> = ({ route }) =
       // Load trips from local storage (which now includes server data if sync succeeded)
       const data = await tripService.getTrips();
       setTrips(data);
+      
+      // Load rated features counts for all trips
+      const counts: Record<string, number> = {};
+      await Promise.all(
+        data.map(async (trip) => {
+          try {
+            const ratings = await ratingService.getRatingsForTrip(trip.id);
+            counts[trip.id] = ratings.length;
+          } catch (err) {
+            console.error(`Error loading ratings for trip ${trip.id}:`, err);
+            counts[trip.id] = 0;
+          }
+        })
+      );
+      setRatedFeaturesCounts(counts);
     } catch (fetchError: any) {
       const appError = handleError(fetchError);
       setError(appError.message);
@@ -143,6 +174,7 @@ export const TripHistoryScreen: React.FC<TripHistoryScreenProps> = ({ route }) =
   // Render individual trip item
   const renderTripItem = ({ item }: { item: Trip }) => {
     const isHighlighted = item.id === highlightedTripId;
+    const ratedCount = ratedFeaturesCounts[item.id] || 0;
     return (
       <View style={isHighlighted ? styles.highlightedTripContainer : undefined}>
         <TripCard 
@@ -150,6 +182,7 @@ export const TripHistoryScreen: React.FC<TripHistoryScreenProps> = ({ route }) =
           onTripEnded={loadTrips} 
           onTripDeleted={loadTrips}
           isHighlighted={isHighlighted}
+          ratedFeaturesCount={ratedCount}
         />
       </View>
     );

@@ -11,6 +11,7 @@ interface TripCardProps {
   onTripEnded?: () => void;
   onTripDeleted?: () => void;
   isHighlighted?: boolean;
+  ratedFeaturesCount?: number;
 }
 
 const MODE_LABELS: Record<Mode, string> = {
@@ -26,7 +27,7 @@ const MODE_LABELS: Record<Mode, string> = {
  * Shows start_time, end_time, duration, and route_info formatted for readability
  * Supports visual highlighting when navigated from HomeScreen
  */
-export const TripCard: React.FC<TripCardProps> = ({ trip, onTripEnded, onTripDeleted, isHighlighted = false }) => {
+export const TripCard: React.FC<TripCardProps> = ({ trip, onTripEnded, onTripDeleted, isHighlighted = false, ratedFeaturesCount = 0 }) => {
   const navigation = useNavigation();
   const { tripService } = useServices();
   const { showSuccess, showError } = useToast();
@@ -208,6 +209,15 @@ export const TripCard: React.FC<TripCardProps> = ({ trip, onTripEnded, onTripDel
             <Text style={styles.label}>Purpose:</Text>
             <Text style={styles.value}>
               {trip.purpose.charAt(0).toUpperCase() + trip.purpose.slice(1)}
+            </Text>
+          </View>
+        )}
+
+        {ratedFeaturesCount > 0 && (
+          <View style={styles.row}>
+            <Text style={styles.label}>Features:</Text>
+            <Text style={styles.value}>
+              {ratedFeaturesCount} rated
             </Text>
           </View>
         )}
