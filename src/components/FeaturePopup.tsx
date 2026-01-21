@@ -7,12 +7,17 @@ import {
 } from 'react-native';
 import { FeaturePopupProps } from '../types';
 
-export const FeaturePopup: React.FC<FeaturePopupProps> = ({
+export const FeaturePopup: React.FC<FeaturePopupProps & { 
+  canGrade?: boolean; 
+  remainingTime?: string; 
+}> = ({
   feature,
   visible,
   onClose,
   onRate,
   tripId,
+  canGrade = true,
+  remainingTime,
 }) => {
   if (!visible) {
     return null;
@@ -22,6 +27,23 @@ export const FeaturePopup: React.FC<FeaturePopupProps> = ({
   const hasRating = feature.rating !== undefined;
   const conditionScore = feature.attributes?.conditionScore;
   const locationDescription = feature.attributes?.LocationDescription || 'Unknown location';
+  const curbReturnLoc = feature.attributes?.curbReturnLoc;
+  const positionOnReturn = feature.attributes?.positionOnReturn;
+
+  // Format curbReturnLoc for display
+  const formatCurbReturnLoc = (loc: string): string => {
+    const directions: Record<string, string> = {
+      'N': 'North',
+      'S': 'South',
+      'E': 'East',
+      'W': 'West',
+      'NE': 'Northeast',
+      'NW': 'Northwest',
+      'SE': 'Southeast',
+      'SW': 'Southwest',
+    };
+    return directions[loc] || loc;
+  };
 
   // Get condition text and color
   let conditionText = 'Unknown';
@@ -69,18 +91,46 @@ export const FeaturePopup: React.FC<FeaturePopupProps> = ({
           </Text>
         </View>
 
+        {curbReturnLoc && (
+          <View style={styles.conditionRow}>
+            <Text style={styles.conditionLabel}>Location in intersection:</Text>
+            <Text style={styles.conditionValue}>
+              {formatCurbReturnLoc(curbReturnLoc)}
+            </Text>
+          </View>
+        )}
+
+        {positionOnReturn && (
+          <View style={styles.conditionRow}>
+            <Text style={styles.conditionLabel}>Position on Curb:</Text>
+            <Text style={styles.conditionValue}>
+              {positionOnReturn}
+            </Text>
+          </View>
+        )}
+
         <TouchableOpacity
-          style={styles.rateButton}
+          style={[styles.rateButton, !canGrade && styles.disabledButton]}
           onPress={onRate}
-          accessibilityLabel={buttonText}
+          disabled={!canGrade}
+          accessibilityLabel={canGrade ? buttonText : 'Rating disabled'}
           accessibilityRole="button"
           accessibilityHint={
-            feature.isRated
-              ? 'Tap to update your accessibility rating'
-              : 'Tap to rate the accessibility of this feature'
+            canGrade
+              ? (feature.isRated
+                  ? 'Tap to update your accessibility rating'
+                  : 'Tap to rate the accessibility of this feature')
+              : 'Rating is only available within 24 hours of trip completion'
           }
         >
-          <Text style={styles.rateButtonText}>{buttonText}</Text>
+          <Text style={[styles.rateButtonText, !canGrade && styles.disabledButtonText]}>
+            {canGrade ? buttonText : 'Rating Unavailable'}
+          </Text>
+          {!canGrade && remainingTime && (
+            <Text style={styles.remainingTimeText}>
+              {remainingTime}
+            </Text>
+          )}
         </TouchableOpacity>
       </View>
     </View>
@@ -172,9 +222,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 44,
   },
+  disabledButton: {
+    backgroundColor: '#CCCCCC',
+  },
   rateButtonText: {
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '600',
+  },
+  disabledButtonText: {
+    color: '#999999',
+  },
+  remainingTimeText: {
+    color: '#999999',
+    fontSize: 12,
+    marginTop: 4,
+    fontWeight: '500',
   },
 });

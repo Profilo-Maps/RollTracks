@@ -75,13 +75,19 @@ describe.skip('TripService Property-Based Tests', () => {
           // it should work regardless of network state
           
           // Start a trip
-          const startedTrip = await tripService.startTrip(routeInfo, userId);
+          const startedTrip = await tripService.startTrip({
+            mode: 'walking',
+            boldness: 5,
+            purpose: 'recreation',
+            userId: userId,
+          });
 
           // Verify trip was created
           expect(startedTrip).toBeDefined();
           expect(startedTrip.status).toBe('active');
           expect(startedTrip.start_time).toBeDefined();
-          expect(startedTrip.route_info).toBe(routeInfo || null);
+          expect(startedTrip.mode).toBeDefined(); // New field
+          expect(startedTrip.boldness).toBeDefined(); // New field
           expect(startedTrip.user_id).toBe(userId);
 
           // Verify trip is stored in AsyncStorage (local storage)

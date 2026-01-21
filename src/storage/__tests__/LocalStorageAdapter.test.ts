@@ -56,13 +56,13 @@ describe('LocalStorageAdapter', () => {
     test('updateProfile updates existing profile', async () => {
       (AsyncStorage.getItem as jest.Mock).mockResolvedValue(JSON.stringify(mockProfile));
 
-      const updates = { age: 26, preferred_route: 'fast' };
+      const updates = { age: 26, mode_list: ['walking', 'scooter'] };
       await adapter.updateProfile('profile-1', updates);
 
       expect(AsyncStorage.setItem).toHaveBeenCalled();
       const savedData = JSON.parse((AsyncStorage.setItem as jest.Mock).mock.calls[0][1]);
       expect(savedData.age).toBe(26);
-      expect(savedData.mode_list).toEqual(['walking', 'wheelchair']); // Unchanged
+      expect(savedData.mode_list).toEqual(['walking', 'scooter']); // Updated
     });
 
     test('updateProfile throws error when profile not found', async () => {

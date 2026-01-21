@@ -69,6 +69,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 // Update local storage with fresh data
                 await AsyncStorage.setItem('@rolltracks:user', JSON.stringify(existingUser));
               }
+
+              // Fetch user's existing data from server when session is restored
+              try {
+                const { SyncService } = await import('../services/SyncService');
+                const syncService = new SyncService();
+                await syncService.initialize();
+                
+                const result = await syncService.fetchUserDataFromServer(existingUser.id);
+                if (result.success) {
+                  console.log('Successfully fetched user data from server on session restore');
+                } else {
+                  console.warn('Failed to fetch user data from server on session restore:', result.error);
+                }
+              } catch (fetchError) {
+                console.error('Error fetching user data on session restore:', fetchError);
+                // Don't throw error here - session restore was successful, data fetch is optional
+              }
             } catch (refreshError) {
               console.error('Error refreshing user data:', refreshError);
             }
@@ -104,6 +121,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const { user: existingUser, session: existingSession } = await authService.login(displayName, password);
     setUser(existingUser);
     setSession(existingSession);
+
+    // Fetch user's existing data from server after successful login
+    if (existingUser) {
+      try {
+        // Import SyncService dynamically to avoid circular dependencies
+        const { SyncService } = await import('../services/SyncService');
+        const syncService = new SyncService();
+        await syncService.initialize();
+        
+        const result = await syncService.fetchUserDataFromServer(existingUser.id);
+        if (result.success) {
+          console.log('Successfully fetched user data from server after login');
+        } else {
+          console.warn('Failed to fetch user data from server:', result.error);
+        }
+      } catch (error) {
+        console.error('Error fetching user data after login:', error);
+        // Don't throw error here - login was successful, data fetch is optional
+      }
+    }
   };
 
   const signOut = async () => {

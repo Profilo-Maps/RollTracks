@@ -41,8 +41,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
 
     try {
       await signIn(displayName.trim(), password);
-      // Navigate to StartTrip screen after successful login
-      navigation.navigate('StartTrip');
+      // Navigation will be handled automatically by auth state change
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {

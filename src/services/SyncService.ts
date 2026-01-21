@@ -43,7 +43,7 @@ export class SyncService {
   private unsubscribeNetInfo: (() => void) | null = null;
   private maxRetries: number = 3;
   private batchSize: number = 10;
-  private periodicSyncInterval: NodeJS.Timeout | null = null;
+  private periodicSyncInterval: ReturnType<typeof setInterval> | null = null;
   private periodicSyncIntervalMs: number = 5 * 60 * 1000; // 5 minutes
 
   /**
@@ -177,6 +177,13 @@ export class SyncService {
 
             if (item.retryCount >= this.maxRetries) {
               console.error(`Item ${item.id} failed after ${this.maxRetries} retries:`, errorMessage);
+              // Log more details for debugging
+              console.error('Failed item details:', {
+                type: item.type,
+                operation: item.operation,
+                userId: item.userId,
+                dataKeys: Object.keys(item.data || {}),
+              });
               errors.push({
                 itemId: item.id,
                 error: errorMessage,
@@ -230,9 +237,153 @@ export class SyncService {
   }
 
   /**
+   * Fetch user's data from server and merge with local storage
+   * This should be called when user logs in to get their existing data
+   */
+  async fetchUserDataFromServer(userId: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.isOnline) {
+      return { success: false, error: 'Device is offline' };
+    }
+
+    if (!supabase) {
+      return { success: false, error: 'Supabase not configured' };
+    }
+
+    try {
+      console.log(`Fetching user data from server for user: ${userId}`);
+
+      // Fetch trips from server
+      const { data: serverTrips, error: tripsError } = await supabase
+        .from('trips')
+        .select('*')
+        .eq('user_id', userId)
+        .order('start_time', { ascending: false });
+
+      if (tripsError) {
+        console.error('Error fetching trips from server:', tripsError);
+        return { success: false, error: `Failed to fetch trips: ${tripsError.message}` };
+      }
+
+      // Fetch rated features from server
+      const { data: serverRatedFeatures, error: ratingsError } = await supabase
+        .from('rated_features')
+        .select('*')
+        .eq('user_id', userId);
+
+      if (ratingsError) {
+        console.error('Error fetching rated features from server:', ratingsError);
+        return { success: false, error: `Failed to fetch rated features: ${ratingsError.message}` };
+      }
+
+      // Get local storage adapters to merge data
+      const localAdapter = await import('../storage/LocalStorageAdapter');
+      const adapter = new localAdapter.LocalStorageAdapter();
+
+      // Get existing local trips
+      const localTrips = await adapter.getTrips();
+      const localTripIds = new Set(localTrips.map(trip => trip.id));
+
+      // Merge server trips with local trips (avoid duplicates)
+      let newTripsCount = 0;
+      if (serverTrips) {
+        for (const serverTrip of serverTrips) {
+          if (!localTripIds.has(serverTrip.id)) {
+            // Transform server trip format to local format
+            const localTrip = {
+              id: serverTrip.id,
+              user_id: serverTrip.user_id,
+              mode: serverTrip.mode,
+              boldness: serverTrip.boldness,
+              purpose: serverTrip.purpose,
+              start_time: serverTrip.start_time,
+              end_time: serverTrip.end_time,
+              duration_seconds: serverTrip.duration_seconds,
+              distance_miles: serverTrip.distance_miles,
+              geometry: serverTrip.geometry,
+              status: serverTrip.status,
+              created_at: serverTrip.created_at,
+              updated_at: serverTrip.updated_at,
+              synced_at: serverTrip.synced_at,
+            };
+            await adapter.saveTrip(localTrip);
+            newTripsCount++;
+          }
+        }
+      }
+
+      // Get existing local rated features
+      const localRatedFeatures = await adapter.getRatedFeatures();
+      const localRatedFeatureKeys = new Set(
+        localRatedFeatures.map(rf => `${rf.id}_${rf.tripId}`)
+      );
+
+      // Merge server rated features with local rated features (avoid duplicates)
+      let newRatedFeaturesCount = 0;
+      if (serverRatedFeatures) {
+        for (const serverRatedFeature of serverRatedFeatures) {
+          const key = `${serverRatedFeature.feature_id}_${serverRatedFeature.trip_id}`;
+          if (!localRatedFeatureKeys.has(key)) {
+            // Transform server rated feature format to local format
+            const localRatedFeature = {
+              id: serverRatedFeature.feature_id,
+              tripId: serverRatedFeature.trip_id,
+              userRating: serverRatedFeature.user_rating,
+              timestamp: serverRatedFeature.timestamp,
+              geometry: {
+                type: 'Point' as const,
+                coordinates: [serverRatedFeature.longitude, serverRatedFeature.latitude] as [number, number],
+              },
+              properties: serverRatedFeature.properties || {},
+            };
+            await adapter.saveRatedFeature(localRatedFeature);
+            newRatedFeaturesCount++;
+          }
+        }
+      }
+
+      console.log(`Data fetch complete: ${newTripsCount} new trips, ${newRatedFeaturesCount} new rated features`);
+
+      return { success: true };
+    } catch (error) {
+      console.error('Error fetching user data from server:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      };
+    }
+  }
+
+  /**
    * Add item to sync queue
    */
   async queueForSync(item: Omit<SyncItem, 'id' | 'retryCount' | 'lastAttempt' | 'error'>, userId?: string): Promise<void> {
+    const queue = await this.getQueue();
+    
+    // For trips and rated features, check for existing items with same data ID
+    if (item.type === 'trip' || item.type === 'rated_feature') {
+      const dataId = item.type === 'trip' ? item.data.id : `${item.data.id}_${item.data.tripId}`;
+      
+      // Remove any existing items for the same data ID to prevent duplicates
+      const filteredQueue = queue.filter(existingItem => {
+        if (existingItem.type !== item.type) return true;
+        
+        const existingDataId = existingItem.type === 'trip' 
+          ? existingItem.data.id 
+          : `${existingItem.data.id}_${existingItem.data.tripId}`;
+          
+        return existingDataId !== dataId;
+      });
+      
+      // If we removed items, log it
+      if (filteredQueue.length < queue.length) {
+        console.log(`Removed ${queue.length - filteredQueue.length} duplicate sync items for ${item.type} ${dataId}`);
+      }
+      
+      // Use the filtered queue
+      queue.length = 0;
+      queue.push(...filteredQueue);
+    }
+
     const syncItem: SyncItem = {
       ...item,
       id: `${item.type}_${item.operation}_${Date.now()}_${Math.random()}`,
@@ -242,7 +393,6 @@ export class SyncService {
       userId: userId || item.userId, // Store userId if provided
     };
 
-    const queue = await this.getQueue();
     queue.push(syncItem);
     await this.saveQueue(queue);
 
@@ -273,11 +423,18 @@ export class SyncService {
   }
 
   /**
-   * Clear sync queue (for testing)
+   * Clear sync queue (for testing and debugging)
    */
   async clearQueue(): Promise<void> {
     await AsyncStorage.removeItem(SYNC_QUEUE_KEY);
     console.log('Sync queue cleared');
+  }
+
+  /**
+   * Get current sync queue for debugging
+   */
+  async getQueueItems(): Promise<SyncItem[]> {
+    return await this.getQueue();
   }
 
   // ============================================================================
@@ -358,33 +515,81 @@ export class SyncService {
 
   /**
    * Sync profile to Supabase
+   * Note: Profiles are stored in user_accounts table, not a separate profiles table
    */
   private async syncProfile(item: SyncItem): Promise<void> {
     if (!supabase) throw new Error('Supabase not configured');
 
-    const table = 'profiles';
+    // Profiles are stored in user_accounts table
+    const table = 'user_accounts';
 
     switch (item.operation) {
       case 'insert':
-        const { error: insertError } = await supabase
-          .from(table)
-          .insert(item.data);
-        if (insertError) throw insertError;
-        break;
-
       case 'update':
+        // For profiles, both insert and update operations should use UPDATE
+        // because the user account already exists from authentication
+        
+        // Get user ID from item (stored when queued), data, or AsyncStorage
+        let userId = item.userId || item.data.user_id;
+        
+        if (!userId) {
+          // Try to get from AsyncStorage (where AuthContext stores it)
+          const userJson = await AsyncStorage.getItem('@rolltracks:user');
+          if (userJson) {
+            const user = JSON.parse(userJson);
+            userId = user.id;
+          }
+        }
+        
+        if (!userId) {
+          throw new Error('User ID not available for profile sync');
+        }
+
+        // Transform local UserProfile to database format for user_accounts table
+        const updateData: any = {
+          updated_at: new Date().toISOString(),
+        };
+        
+        if (item.data.age !== undefined) updateData.age = item.data.age;
+        if (item.data.mode_list !== undefined) updateData.mode_list = item.data.mode_list;
+        if (item.data.trip_history_ids !== undefined) updateData.trip_history_ids = item.data.trip_history_ids;
+
         const { error: updateError } = await supabase
           .from(table)
-          .update(item.data)
-          .eq('id', item.data.id);
+          .update(updateData)
+          .eq('id', userId); // Use id (not user_id) for user_accounts table
+        
         if (updateError) throw updateError;
         break;
 
       case 'delete':
+        // For profile deletion, we don't actually delete the user account
+        // Instead, we clear the profile fields
+        let deleteUserId = item.userId || item.data.user_id;
+        
+        if (!deleteUserId) {
+          // Try to get from AsyncStorage (where AuthContext stores it)
+          const userJson = await AsyncStorage.getItem('@rolltracks:user');
+          if (userJson) {
+            const user = JSON.parse(userJson);
+            deleteUserId = user.id;
+          }
+        }
+        
+        if (!deleteUserId) {
+          throw new Error('User ID not available for profile sync');
+        }
+
         const { error: deleteError } = await supabase
           .from(table)
-          .delete()
-          .eq('id', item.data.id);
+          .update({
+            age: null,
+            mode_list: null,
+            trip_history_ids: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', deleteUserId);
+        
         if (deleteError) throw deleteError;
         break;
     }
@@ -402,26 +607,121 @@ export class SyncService {
 
     switch (item.operation) {
       case 'insert':
+        // Get user ID from item (stored when queued), data, or AsyncStorage
+        let userId = item.userId || item.data.user_id;
+        
+        if (!userId) {
+          // Try to get from AsyncStorage (where AuthContext stores it)
+          const userJson = await AsyncStorage.getItem('@rolltracks:user');
+          if (userJson) {
+            const user = JSON.parse(userJson);
+            userId = user.id;
+          }
+        }
+        
+        if (!userId) {
+          throw new Error('User ID not available for trip sync');
+        }
+
+        // Transform local Trip to database TripInsert format
+        const insertData = {
+          id: item.data.id,
+          user_id: userId,
+          mode: item.data.mode,
+          boldness: item.data.boldness,
+          purpose: item.data.purpose || null,
+          start_time: item.data.start_time,
+          end_time: item.data.end_time,
+          duration_seconds: item.data.duration_seconds,
+          distance_miles: item.data.distance_miles,
+          geometry: item.data.geometry,
+          status: item.data.status,
+          created_at: item.data.created_at,
+          updated_at: item.data.updated_at,
+          synced_at: new Date().toISOString(),
+        };
+
         const { error: insertError } = await supabase
           .from(table)
-          .insert({
-            ...item.data,
-            synced_at: new Date().toISOString(),
-          });
+          .insert(insertData);
+        
         if (insertError) {
-          console.error('Trip insert error:', insertError);
-          throw insertError;
+          // Handle duplicate key constraint violation
+          if (insertError.code === '23505' && insertError.message?.includes('trips_pkey')) {
+            console.log(`Trip ${item.data.id} already exists, converting to update operation`);
+            
+            // Convert to update operation by removing fields that shouldn't be updated
+            const updateData: any = {
+              synced_at: new Date().toISOString(),
+            };
+            
+            // Only include fields that can be updated
+            if (item.data.mode !== undefined) updateData.mode = item.data.mode;
+            if (item.data.boldness !== undefined) updateData.boldness = item.data.boldness;
+            if (item.data.purpose !== undefined) updateData.purpose = item.data.purpose;
+            if (item.data.end_time !== undefined) updateData.end_time = item.data.end_time;
+            if (item.data.duration_seconds !== undefined) updateData.duration_seconds = item.data.duration_seconds;
+            if (item.data.distance_miles !== undefined) updateData.distance_miles = item.data.distance_miles;
+            if (item.data.geometry !== undefined) updateData.geometry = item.data.geometry;
+            if (item.data.status !== undefined) updateData.status = item.data.status;
+            if (item.data.updated_at !== undefined) updateData.updated_at = item.data.updated_at;
+
+            const { error: updateError } = await supabase
+              .from(table)
+              .update(updateData)
+              .eq('id', item.data.id);
+              
+            if (updateError) {
+              console.error('Trip update after duplicate error:', updateError);
+              throw updateError;
+            }
+            console.log('Trip updated successfully (was duplicate)');
+          } else {
+            console.error('Trip insert error:', insertError);
+            throw insertError;
+          }
+        } else {
+          console.log('Trip inserted successfully');
         }
-        console.log('Trip inserted successfully');
         break;
 
       case 'update':
+        // Get user ID for the update query
+        let updateUserId = item.userId || item.data.user_id;
+        
+        if (!updateUserId) {
+          // Try to get from AsyncStorage (where AuthContext stores it)
+          const userJson = await AsyncStorage.getItem('@rolltracks:user');
+          if (userJson) {
+            const user = JSON.parse(userJson);
+            updateUserId = user.id;
+          }
+        }
+        
+        if (!updateUserId) {
+          throw new Error('User ID not available for trip sync');
+        }
+
+        // Transform local Trip to database TripUpdate format
+        const updateData: any = {
+          synced_at: new Date().toISOString(),
+        };
+        
+        // Only include fields that are defined in the update
+        if (item.data.mode !== undefined) updateData.mode = item.data.mode;
+        if (item.data.boldness !== undefined) updateData.boldness = item.data.boldness;
+        if (item.data.purpose !== undefined) updateData.purpose = item.data.purpose;
+        if (item.data.start_time !== undefined) updateData.start_time = item.data.start_time;
+        if (item.data.end_time !== undefined) updateData.end_time = item.data.end_time;
+        if (item.data.duration_seconds !== undefined) updateData.duration_seconds = item.data.duration_seconds;
+        if (item.data.distance_miles !== undefined) updateData.distance_miles = item.data.distance_miles;
+        if (item.data.geometry !== undefined) updateData.geometry = item.data.geometry;
+        if (item.data.status !== undefined) updateData.status = item.data.status;
+        if (item.data.updated_at !== undefined) updateData.updated_at = item.data.updated_at;
+
         const { error: updateError } = await supabase
           .from(table)
-          .update({
-            ...item.data,
-            synced_at: new Date().toISOString(),
-          })
+          .update(updateData)
           .eq('id', item.data.id);
         if (updateError) {
           console.error('Trip update error:', updateError);
@@ -485,7 +785,39 @@ export class SyncService {
         const { error: insertError } = await supabase
           .from(table)
           .insert(insertData);
-        if (insertError) throw insertError;
+        
+        if (insertError) {
+          // Handle duplicate key constraint violation
+          if (insertError.code === '23505') {
+            console.log(`Rated feature ${item.data.id} for trip ${item.data.tripId} already exists, converting to update operation`);
+            
+            // Convert to update operation
+            const updateData: any = {};
+            if (item.data.userRating !== undefined) {
+              updateData.user_rating = item.data.userRating;
+            }
+            if (item.data.properties !== undefined) {
+              updateData.properties = item.data.properties;
+            }
+
+            const { error: updateError } = await supabase
+              .from(table)
+              .update(updateData)
+              .eq('feature_id', item.data.id)
+              .eq('trip_id', item.data.tripId);
+              
+            if (updateError) {
+              console.error('Rated feature update after duplicate error:', updateError);
+              throw updateError;
+            }
+            console.log('Rated feature updated successfully (was duplicate)');
+          } else {
+            console.error('Rated feature insert error:', insertError);
+            throw insertError;
+          }
+        } else {
+          console.log('Rated feature inserted successfully');
+        }
         break;
 
       case 'update':

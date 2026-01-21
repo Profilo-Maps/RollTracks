@@ -255,6 +255,61 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     }
   }
 
+  async getRatedFeaturesForTrip(tripId: string): Promise<RatedFeature[]> {
+    if (!supabase) {
+      throw new Error('Supabase not configured');
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('rated_features')
+        .select('*')
+        .eq('trip_id', tripId);
+
+      if (error) throw error;
+
+      return (data || []).map(item => this.mapRatedFeatureFromDb(item));
+    } catch (error) {
+      console.error('Error getting rated features for trip from Supabase:', error);
+      throw error;
+    }
+  }
+
+  async updateRatedFeature(
+    featureId: string,
+    tripId: string,
+    updates: Partial<RatedFeature>
+  ): Promise<void> {
+    if (!supabase) {
+      throw new Error('Supabase not configured');
+    }
+
+    try {
+      const updateData: any = {};
+      
+      if (updates.userRating !== undefined) {
+        updateData.user_rating = updates.userRating;
+      }
+      if (updates.properties !== undefined) {
+        updateData.properties = updates.properties;
+      }
+      if (updates.timestamp !== undefined) {
+        updateData.timestamp = updates.timestamp;
+      }
+
+      const { error } = await supabase
+        .from('rated_features')
+        .update(updateData)
+        .eq('feature_id', featureId)
+        .eq('trip_id', tripId);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error updating rated feature in Supabase:', error);
+      throw error;
+    }
+  }
+
   // ============================================================================
   // PRIVATE MAPPING METHODS
   // ============================================================================

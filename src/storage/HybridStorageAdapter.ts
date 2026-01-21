@@ -34,13 +34,13 @@ export class HybridStorageAdapter implements StorageAdapter {
     // Write to local storage first
     await this.localAdapter.saveProfile(profile);
 
-    // Queue for cloud sync
+    // Always queue for cloud sync in cloud mode
     await this.syncService.queueForSync({
       type: 'profile',
       operation: 'insert',
       data: profile,
       timestamp: Date.now(),
-    });
+    }, profile.user_id);
   }
 
   async updateProfile(id: string, updates: Partial<UserProfile>): Promise<void> {
@@ -50,13 +50,13 @@ export class HybridStorageAdapter implements StorageAdapter {
     // Get updated profile for sync
     const updatedProfile = await this.localAdapter.getProfile();
     if (updatedProfile) {
-      // Queue for cloud sync
+      // Always queue for cloud sync in cloud mode
       await this.syncService.queueForSync({
         type: 'profile',
         operation: 'update',
         data: updatedProfile,
         timestamp: Date.now(),
-      });
+      }, updatedProfile.user_id);
     }
   }
 
@@ -78,13 +78,14 @@ export class HybridStorageAdapter implements StorageAdapter {
     // Write to local storage first
     await this.localAdapter.saveTrip(trip);
 
-    // Queue for cloud sync
+    // Always queue for cloud sync in cloud mode
+    // Use 'insert' operation, but the sync service will handle duplicates gracefully
     await this.syncService.queueForSync({
       type: 'trip',
       operation: 'insert',
       data: trip,
       timestamp: Date.now(),
-    });
+    }, trip.user_id);
   }
 
   async updateTrip(id: string, updates: Partial<Trip>): Promise<void> {
@@ -94,13 +95,14 @@ export class HybridStorageAdapter implements StorageAdapter {
     // Get updated trip for sync
     const updatedTrip = await this.localAdapter.getTrip(id);
     if (updatedTrip) {
-      // Queue for cloud sync
+      // Always queue for cloud sync in cloud mode
+      // Use 'insert' operation since the sync service will handle it as upsert
       await this.syncService.queueForSync({
         type: 'trip',
-        operation: 'update',
+        operation: 'insert',
         data: updatedTrip,
         timestamp: Date.now(),
-      });
+      }, updatedTrip.user_id);
 
       // If trip is completed, trigger immediate sync
       if (updatedTrip.status === 'completed') {
@@ -122,16 +124,21 @@ export class HybridStorageAdapter implements StorageAdapter {
   }
 
   async deleteTrip(id: string): Promise<void> {
+    // Get the trip first to get the user_id
+    const trip = await this.localAdapter.getTrip(id);
+    
     // Delete from local storage first
     await this.localAdapter.deleteTrip(id);
 
-    // Queue for cloud sync
-    await this.syncService.queueForSync({
-      type: 'trip',
-      operation: 'delete',
-      data: { id },
-      timestamp: Date.now(),
-    });
+    // Always queue for cloud sync in cloud mode
+    if (trip) {
+      await this.syncService.queueForSync({
+        type: 'trip',
+        operation: 'delete',
+        data: { id },
+        timestamp: Date.now(),
+      }, trip.user_id);
+    }
   }
 
   // ============================================================================
@@ -171,19 +178,24 @@ export class HybridStorageAdapter implements StorageAdapter {
     // Write to local storage first
     await this.localAdapter.saveRatedFeature(feature);
 
-    // Queue for cloud sync
-    await this.syncService.queueForSync({
-      type: 'rated_feature',
-      operation: 'insert',
-      data: feature,
-      timestamp: Date.now(),
-    });
+    // Get the associated trip to get the user_id
+    const trip = await this.localAdapter.getTrip(feature.tripId);
+    
+    // Always queue for cloud sync in cloud mode
+    if (trip) {
+      await this.syncService.queueForSync({
+        type: 'rated_feature',
+        operation: 'insert',
+        data: feature,
+        timestamp: Date.now(),
+      }, trip.user_id);
 
-    // Trigger immediate sync for rated features (they're created during/after trips)
-    console.log('Rated feature saved, triggering immediate sync');
-    this.syncService.syncNow().catch(error => {
-      console.error('Immediate sync after rated feature save failed:', error);
-    });
+      // Trigger immediate sync for rated features (they're created during/after trips)
+      console.log('Rated feature saved, triggering immediate sync');
+      this.syncService.syncNow().catch(error => {
+        console.error('Immediate sync after rated feature save failed:', error);
+      });
+    }
   }
 
   async getRatedFeaturesForTrip(tripId: string): Promise<RatedFeature[]> {
@@ -204,13 +216,31 @@ export class HybridStorageAdapter implements StorageAdapter {
     const updatedFeature = features.find(f => f.id === featureId);
 
     if (updatedFeature) {
-      // Queue for cloud sync
-      await this.syncService.queueForSync({
-        type: 'rated_feature',
-        operation: 'update',
-        data: updatedFeature,
-        timestamp: Date.now(),
-      });
+      // Get the associated trip to get the user_id
+      const trip = await this.localAdapter.getTrip(tripId);
+      
+      // Always queue for cloud sync in cloud mode
+      if (trip) {
+        await this.syncService.queueForSync({
+          type: 'rated_feature',
+          operation: 'update',
+          data: updatedFeature,
+          timestamp: Date.now(),
+        }, trip.user_id);
+      }
     }
+  }
+
+  // ============================================================================
+  // SYNC OPERATIONS
+  // ============================================================================
+
+  /**
+   * Fetch user's data from server and merge with local storage
+   * @param userId - The user ID to fetch data for
+   * @returns Promise with success status and optional error message
+   */
+  async fetchUserDataFromServer(userId: string): Promise<{ success: boolean; error?: string }> {
+    return await this.syncService.fetchUserDataFromServer(userId);
   }
 }

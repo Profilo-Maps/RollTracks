@@ -8,3 +8,9 @@ export {
   ErrorCode,
 } from './errors';
 export type { AppError } from './errors';
+export {
+  processRatings,
+  calculateMapRegion,
+  getMarkerColor,
+} from './homeScreenUtils';
+export type { ProcessedRatedFeature, MapRegion } from './homeScreenUtils';

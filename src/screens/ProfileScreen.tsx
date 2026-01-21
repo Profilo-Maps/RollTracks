@@ -9,11 +9,11 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useServices } from '../contexts/ServicesContext';
-import { ModeIndicator } from '../components/ModeIndicator';
+
 import { ModeSelector } from '../components/ModeSelector';
 import { ProfileStatistics } from '../components/ProfileStatistics';
 import { UserProfile, Mode } from '../types';
@@ -22,7 +22,7 @@ import { handleError } from '../utils/errors';
 
 export const ProfileScreen: React.FC = () => {
   const navigation = useNavigation();
-  const { user, deleteAccount, updateProfile: updateUserProfile } = useAuth();
+  const { user, deleteAccount, updateProfile: updateUserProfile, signOut } = useAuth();
   const { showError, showSuccess } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -47,6 +47,26 @@ export const ProfileScreen: React.FC = () => {
     loadProfile();
   }, [user]);
 
+  // Refresh statistics when screen comes into focus
+  useFocusEffect(
+    React.useCallback(() => {
+      if (profile && user && !isEditing) {
+        refreshStatistics();
+      }
+    }, [profile, user, isEditing])
+  );
+
+  const refreshStatistics = async () => {
+    if (!user) return;
+    
+    try {
+      const stats = await statisticsService.getProfileStatistics(user.id);
+      setStatistics(stats);
+    } catch (error) {
+      console.log('Could not refresh statistics:', error);
+    }
+  };
+
   const loadProfile = async () => {
     setLoading(true);
     try {
@@ -54,17 +74,17 @@ export const ProfileScreen: React.FC = () => {
       if (user?.age && user?.modeList && user.modeList.length > 0) {
         // User has profile data, populate form
         setAge(user.age.toString());
-        setModeList(user.modeList);
+        setModeList(user.modeList as Mode[]);
         
         // Create a profile object for compatibility
         const userProfile: UserProfile = {
           id: user.id,
           user_id: user.id,
           age: user.age,
-          mode_list: user.modeList,
+          mode_list: user.modeList as Mode[],
           trip_history_ids: user.tripHistoryIds || [],
-          created_at: user.createdAt,
-          updated_at: user.createdAt,
+          created_at: user.createdAt || new Date().toISOString(),
+          updated_at: user.createdAt || new Date().toISOString(),
         };
         setProfile(userProfile);
         
@@ -156,7 +176,7 @@ export const ProfileScreen: React.FC = () => {
         });
       } else {
         await profileService.createProfile({
-          user_id: user?.id,
+          user_id: user?.id || '',
           age: profileData.age,
           mode_list: profileData.modeList,
         });
@@ -214,7 +234,34 @@ export const ProfileScreen: React.FC = () => {
         },
       ]
     );
-  };;
+  };
+
+  const handleSignOut = () => {
+    Alert.alert(
+      'Sign Out',
+      'Are you sure you want to sign out?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Sign Out',
+          style: 'default',
+          onPress: async () => {
+            try {
+              await signOut();
+              showSuccess('Signed out successfully');
+              // Navigation to login will be handled by auth state change
+            } catch (error: any) {
+              const appError = handleError(error);
+              showError(appError.message);
+            }
+          },
+        },
+      ]
+    );
+  };
 
   if (loading) {
     return (
@@ -232,7 +279,6 @@ export const ProfileScreen: React.FC = () => {
         accessible={false}
         accessibilityLabel="Profile screen"
       >
-        <ModeIndicator />
         
         <View style={styles.content}>
           <Text 
@@ -280,6 +326,16 @@ export const ProfileScreen: React.FC = () => {
           </TouchableOpacity>
 
           <TouchableOpacity
+            style={[styles.button, styles.buttonSecondary]}
+            onPress={handleSignOut}
+            accessibilityLabel="Sign out"
+            accessibilityRole="button"
+            accessibilityHint="Tap to sign out of your account"
+          >
+            <Text style={styles.buttonSecondaryText}>Sign Out</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
             style={[styles.button, styles.buttonDanger]}
             onPress={handleDeleteAccount}
             accessibilityLabel="Delete account"
@@ -300,7 +356,6 @@ export const ProfileScreen: React.FC = () => {
       accessible={false}
       accessibilityLabel="Profile screen"
     >
-      <ModeIndicator />
       
       <View style={styles.content}>
         <Text 

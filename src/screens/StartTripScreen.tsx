@@ -15,7 +15,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useServices } from '../contexts/ServicesContext';
 import { GPSService } from '../services/GPSService';
-import { ModeIndicator } from '../components/ModeIndicator';
+
 import { ModeSelector } from '../components/ModeSelector';
 import { BoldnessSelector } from '../components/BoldnessSelector';
 import { PurposeSelector } from '../components/PurposeSelector';
@@ -24,7 +24,7 @@ import { handleError } from '../utils/errors';
 
 export const StartTripScreen: React.FC = () => {
   const navigation = useNavigation();
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const { showError, showSuccess } = useToast();
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
@@ -56,7 +56,7 @@ export const StartTripScreen: React.FC = () => {
     try {
       // First check if user has profile data in AuthContext
       if (user?.modeList && user.modeList.length > 0) {
-        setAvailableModes(user.modeList);
+        setAvailableModes(user.modeList as Mode[]);
       } else {
         // Fallback to checking local storage
         const profile = await profileService.getProfile();
@@ -85,6 +85,17 @@ export const StartTripScreen: React.FC = () => {
 
   const handleStartTrip = async () => {
     if (!selectedMode || selectedBoldness === null || !selectedPurpose) {
+      return;
+    }
+
+    if (!user?.id) {
+      showError('User not authenticated. Please log in again.');
+      // Sign out to trigger auth state change and show login screen
+      try {
+        await signOut();
+      } catch (error) {
+        console.error('Error signing out:', error);
+      }
       return;
     }
 
@@ -123,7 +134,7 @@ export const StartTripScreen: React.FC = () => {
         mode: selectedMode,
         boldness: selectedBoldness,
         purpose: selectedPurpose,
-        userId: user?.id,
+        userId: user.id, // Now guaranteed to be available
       });
       
       showSuccess('Trip started successfully');
@@ -152,7 +163,6 @@ export const StartTripScreen: React.FC = () => {
       accessible={false}
       accessibilityLabel="Start trip screen"
     >
-      <ModeIndicator />
       
       <View style={styles.content}>
         <Text 

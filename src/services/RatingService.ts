@@ -1,5 +1,6 @@
 import { LocalStorageAdapter } from '../storage/LocalStorageAdapter';
-import { RatedFeature, ObstacleFeature } from '../types';
+import { RatedFeature, ObstacleFeature, Trip } from '../types';
+import { canGradeTrip } from '../utils/timeValidation';
 
 const ERROR_MESSAGES = {
   INVALID_RATING: 'Rating must be between 1 and 10',
@@ -8,6 +9,7 @@ const ERROR_MESSAGES = {
   STORAGE_WRITE_FAILED: 'Failed to save rating. Please try again.',
   STORAGE_READ_FAILED: 'Failed to load ratings',
   FEATURE_NOT_FOUND: 'Rated feature not found',
+  GRADING_WINDOW_EXPIRED: 'Features can only be graded within 24 hours of trip completion',
 };
 
 /**
@@ -24,14 +26,14 @@ export class RatingService {
   /**
    * Create a new rating for an obstacle feature
    * @param feature - The obstacle feature to rate
-   * @param tripId - The ID of the trip during which the rating is created
+   * @param trip - The trip during which the rating is created
    * @param rating - The accessibility rating (1-10)
    * @returns The created RatedFeature
    * @throws Error if validation fails or storage operation fails
    */
   async createRating(
     feature: ObstacleFeature,
-    tripId: string,
+    trip: Trip,
     rating: number
   ): Promise<RatedFeature> {
     try {
@@ -45,15 +47,28 @@ export class RatingService {
         throw new Error(ERROR_MESSAGES.INVALID_FEATURE);
       }
 
-      // Validate tripId is provided
-      if (!tripId) {
+      // Validate trip is provided
+      if (!trip.id) {
         throw new Error(ERROR_MESSAGES.NO_ACTIVE_TRIP);
+      }
+
+      // Check if trip is within 24-hour grading window (only for completed trips)
+      if (trip.status === 'completed' && !canGradeTrip(trip)) {
+        throw new Error(ERROR_MESSAGES.GRADING_WINDOW_EXPIRED);
+      }
+
+      // Check if feature already has a rating for this trip
+      const existingRating = await this.getRatingForFeature(feature.id, trip.id);
+      
+      if (existingRating) {
+        // Update existing rating instead of creating a new one
+        return await this.updateRating(feature.id, trip, rating);
       }
 
       // Create RatedFeature object with all properties
       const ratedFeature: RatedFeature = {
         id: feature.id,
-        tripId: tripId,
+        tripId: trip.id,
         userRating: rating,
         timestamp: new Date().toISOString(),
         geometry: {
@@ -113,14 +128,14 @@ export class RatingService {
   /**
    * Update an existing rating
    * @param featureId - The ID of the feature
-   * @param tripId - The ID of the trip
+   * @param trip - The trip associated with the rating
    * @param rating - The new accessibility rating (1-10)
    * @returns The updated RatedFeature
    * @throws Error if validation fails or feature not found
    */
   async updateRating(
     featureId: string,
-    tripId: string,
+    trip: Trip,
     rating: number
   ): Promise<RatedFeature> {
     try {
@@ -129,13 +144,18 @@ export class RatingService {
         throw new Error(ERROR_MESSAGES.INVALID_RATING);
       }
 
+      // Check if trip is within 24-hour grading window (only for completed trips)
+      if (trip.status === 'completed' && !canGradeTrip(trip)) {
+        throw new Error(ERROR_MESSAGES.GRADING_WINDOW_EXPIRED);
+      }
+
       // Update the feature (timestamp is preserved by updateRatedFeature)
-      await this.storageAdapter.updateRatedFeature(featureId, tripId, {
+      await this.storageAdapter.updateRatedFeature(featureId, trip.id, {
         userRating: rating,
       });
 
       // Retrieve and return the updated feature
-      const updatedFeature = await this.getRatingForFeature(featureId, tripId);
+      const updatedFeature = await this.getRatingForFeature(featureId, trip.id);
       if (!updatedFeature) {
         throw new Error(ERROR_MESSAGES.FEATURE_NOT_FOUND);
       }

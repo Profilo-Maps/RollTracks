@@ -91,3 +91,40 @@ jest.mock('@supabase/supabase-js', () => ({
     },
   })),
 }));
+
+// Mock NetInfo
+jest.mock('@react-native-community/netinfo', () => ({
+  __esModule: true,
+  default: {
+    fetch: jest.fn(() => Promise.resolve({
+      isConnected: true,
+      isInternetReachable: true,
+      type: 'wifi',
+    })),
+    addEventListener: jest.fn(() => jest.fn()),
+  },
+}));
+
+// Mock react-native-geolocation-service
+jest.mock('react-native-geolocation-service', () => ({
+  __esModule: true,
+  default: {
+    getCurrentPosition: jest.fn(),
+    watchPosition: jest.fn(),
+    clearWatch: jest.fn(),
+    stopObserving: jest.fn(),
+  },
+}));
+
+// Mock react-native-fs
+jest.mock('react-native-fs', () => ({
+  __esModule: true,
+  default: {
+    DocumentDirectoryPath: '/mock/documents',
+    exists: jest.fn(() => Promise.resolve(false)),
+    mkdir: jest.fn(() => Promise.resolve()),
+    readFile: jest.fn(() => Promise.resolve('')),
+    writeFile: jest.fn(() => Promise.resolve()),
+    unlink: jest.fn(() => Promise.resolve()),
+  },
+}));

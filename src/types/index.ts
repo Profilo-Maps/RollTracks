@@ -19,7 +19,7 @@ export interface LocationPoint {
 
 export interface UserProfile {
   id: string;
-  user_id?: string; // Optional in demo mode
+  user_id: string; // Required in cloud mode
   age: number;
   mode_list: Mode[]; // Changed from vehicle_type
   trip_history_ids?: string[]; // References to trips
@@ -27,21 +27,7 @@ export interface UserProfile {
   updated_at: string;
 }
 
-export interface Trip {
-  id: string;
-  user_id?: string; // Optional in demo mode
-  mode: Mode; // New field
-  boldness: number; // New field (1-10)
-  purpose?: TripPurpose; // New field
-  start_time: string;
-  end_time: string | null;
-  duration_seconds: number | null;
-  distance_miles: number | null; // New field
-  geometry: string | null; // Encoded polyline
-  status: 'active' | 'completed';
-  created_at: string;
-  updated_at: string;
-}
+// Note: Trip type is imported from database.types.ts
 
 
 
@@ -59,7 +45,6 @@ export interface AppError {
 }
 
 export interface AppMode {
-  mode: 'demo' | 'cloud';
   supabaseConfigured: boolean;
   authenticated: boolean;
 }

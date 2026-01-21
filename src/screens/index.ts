@@ -6,3 +6,4 @@ export { StartTripScreen } from './StartTripScreen';
 export { ActiveTripScreen } from './ActiveTripScreen';
 export { TripSummaryScreen } from './TripSummaryScreen';
 export { TripHistoryScreen } from './TripHistoryScreen';
+export { HomeScreen } from './HomeScreen';

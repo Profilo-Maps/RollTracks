@@ -22,7 +22,7 @@ export class TripService {
     mode: Mode;
     boldness: number;
     purpose?: TripPurpose;
-    userId?: string;
+    userId: string; // Required in cloud mode
   }): Promise<Trip> {
     try {
       // Validate boldness
@@ -194,6 +194,33 @@ export class TripService {
         throw error;
       }
       throw new Error('An unexpected error occurred while fetching trip');
+    }
+  }
+
+  /**
+   * Delete a trip
+   * @param tripId - ID of the trip to delete
+   * @throws Error if trip is currently active or deletion fails
+   */
+  async deleteTrip(tripId: string): Promise<void> {
+    try {
+      // Check if the trip exists
+      const trip = await this.storageAdapter.getTrip(tripId);
+      if (!trip) {
+        throw new Error('Trip not found');
+      }
+
+      // Prevent deletion of active trips
+      if (trip.status === 'active' || trip.status === 'paused') {
+        throw new Error('Cannot delete an active trip. Please end the trip first.');
+      }
+
+      await this.storageAdapter.deleteTrip(tripId);
+    } catch (error: any) {
+      if (error.message) {
+        throw error;
+      }
+      throw new Error('An unexpected error occurred while deleting trip');
     }
   }
 

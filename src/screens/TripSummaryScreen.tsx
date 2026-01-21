@@ -10,12 +10,17 @@ import {
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { TripSummaryCard } from '../components/TripSummaryCard';
 import { MapView } from '../components/MapView';
+import { MapViewMapbox } from '../components/MapViewMapbox';
 import { FeaturePopup } from '../components/FeaturePopup';
+import { RatingModal } from '../components/RatingModal';
 import { GPSService } from '../services/GPSService';
 import { RatingService } from '../services/RatingService';
 import { LocalStorageAdapter } from '../storage/LocalStorageAdapter';
 import { obstacleService } from '../services/ObstacleService';
+import { useToast } from '../contexts/ToastContext';
+import { canGradeTrip, formatRemainingTime, getRemainingGradingTime } from '../utils/timeValidation';
 import { Trip, LocationPoint, RatedFeature, ObstacleFeature, ObstacleFeatureWithRating } from '../types';
+import { FeatureFlags } from '../config/features';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const DRAWER_PEEK_HEIGHT = 60; // Height of the tab when minimized
@@ -33,10 +38,16 @@ export const TripSummaryScreen: React.FC = () => {
   const [allEncounteredObstacles, setAllEncounteredObstacles] = useState<ObstacleFeature[]>([]);
   const [selectedFeature, setSelectedFeature] = useState<ObstacleFeatureWithRating | null>(null);
   const [showFeaturePopup, setShowFeaturePopup] = useState(false);
+  const [showRatingModal, setShowRatingModal] = useState(false);
 
   // Initialize services
   const storageAdapter = new LocalStorageAdapter();
   const ratingService = new RatingService(storageAdapter);
+  const { showSuccess, showError } = useToast();
+
+  // Check if trip can be graded
+  const canGrade = trip ? canGradeTrip(trip) : false;
+  const remainingTime = trip ? getRemainingGradingTime(trip) : 0;
 
   // Decode the trip's polyline geometry
   useEffect(() => {
@@ -209,6 +220,47 @@ export const TripSummaryScreen: React.FC = () => {
     setSelectedFeature(null);
   };
 
+  // Handle rate button press
+  const handleRateButtonPress = () => {
+    if (!canGrade) {
+      showError('Features can only be graded within 24 hours of trip completion');
+      return;
+    }
+    setShowFeaturePopup(false);
+    setShowRatingModal(true);
+  };
+
+  // Handle rating submission
+  const handleRatingSubmit = async (rating: number) => {
+    if (!selectedFeature || !trip) {
+      return;
+    }
+
+    try {
+      // Always call createRating - the service will handle existing ratings internally
+      await ratingService.createRating(selectedFeature, trip, rating);
+      showSuccess('Feature rated successfully');
+
+      // Refresh rated features
+      const ratings = await ratingService.getRatingsForTrip(trip.id);
+      setRatedFeatures(ratings);
+
+      setShowRatingModal(false);
+      setSelectedFeature(null);
+    } catch (error: any) {
+      console.error('Error submitting rating:', error);
+      showError(error.message || 'Failed to save rating');
+      setShowRatingModal(false);
+      setShowFeaturePopup(true);
+    }
+  };
+
+  // Handle rating cancel
+  const handleRatingCancel = () => {
+    setShowRatingModal(false);
+    setShowFeaturePopup(true);
+  };
+
   // Get rated feature IDs and ratings for visual distinction
   const ratedFeatureIds = ratedFeatures.map(r => r.id);
   const ratedFeatureRatings = useMemo(() => {
@@ -228,9 +280,12 @@ export const TripSummaryScreen: React.FC = () => {
     ratedFeatureRatingsCount: Object.keys(ratedFeatureRatings).length,
   });
 
+  // Select map component based on feature flag
+  const MapComponent = FeatureFlags.USE_MAPBOX_VECTOR_TILES ? MapViewMapbox : MapView;
+
   return (
     <View style={styles.container}>
-      <MapView
+      <MapComponent
         currentLocation={currentLocation}
         routePoints={routePoints}
         isPaused={false}
@@ -239,6 +294,7 @@ export const TripSummaryScreen: React.FC = () => {
         onFeatureTap={handleFeatureTap}
         ratedFeatureIds={ratedFeatureIds}
         ratedFeatureRatings={ratedFeatureRatings}
+        enableLazyLoading={false}
       />
       
       {selectedFeature && (
@@ -246,8 +302,19 @@ export const TripSummaryScreen: React.FC = () => {
           feature={selectedFeature}
           visible={showFeaturePopup}
           onClose={handleFeaturePopupClose}
-          onRate={() => {}} // No rating on summary screen
+          onRate={handleRateButtonPress}
           tripId={trip?.id || ''}
+          canGrade={canGrade}
+          remainingTime={canGrade ? undefined : formatRemainingTime(remainingTime)}
+        />
+      )}
+
+      {selectedFeature && (
+        <RatingModal
+          visible={showRatingModal}
+          initialRating={selectedFeature.rating}
+          onSubmit={handleRatingSubmit}
+          onCancel={handleRatingCancel}
         />
       )}
       <Animated.View 

@@ -1,10 +1,16 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Trip, Mode } from '../types';
+import { canGradeTrip, formatRemainingTime, getRemainingGradingTime } from '../utils/timeValidation';
+import { useServices } from '../contexts/ServicesContext';
+import { useToast } from '../contexts/ToastContext';
 
 interface TripCardProps {
   trip: Trip;
+  onTripEnded?: () => void;
+  onTripDeleted?: () => void;
+  isHighlighted?: boolean;
 }
 
 const MODE_LABELS: Record<Mode, string> = {
@@ -18,9 +24,14 @@ const MODE_LABELS: Record<Mode, string> = {
 /**
  * TripCard component displays individual trip information
  * Shows start_time, end_time, duration, and route_info formatted for readability
+ * Supports visual highlighting when navigated from HomeScreen
  */
-export const TripCard: React.FC<TripCardProps> = ({ trip }) => {
+export const TripCard: React.FC<TripCardProps> = ({ trip, onTripEnded, onTripDeleted, isHighlighted = false }) => {
   const navigation = useNavigation();
+  const { tripService } = useServices();
+  const { showSuccess, showError } = useToast();
+  const [isEnding, setIsEnding] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   
   const handlePress = () => {
     // If trip is active or paused, navigate to ActiveTripScreen
@@ -33,17 +44,72 @@ export const TripCard: React.FC<TripCardProps> = ({ trip }) => {
     }
   };
 
+  const handleResume = () => {
+    (navigation as any).navigate('ActiveTrip', { tripId: trip.id });
+  };
+
+  const handleEndTrip = async () => {
+    try {
+      setIsEnding(true);
+      await tripService.stopTrip(trip.id);
+      showSuccess('Trip ended successfully');
+      if (onTripEnded) {
+        onTripEnded();
+      }
+    } catch (error: any) {
+      showError(error.message || 'Failed to end trip');
+    } finally {
+      setIsEnding(false);
+    }
+  };
+
+  const handleDeleteTrip = () => {
+    Alert.alert(
+      'Delete Trip',
+      'Are you sure you want to delete this trip? This action cannot be undone.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setIsDeleting(true);
+              await tripService.deleteTrip(trip.id);
+              showSuccess('Trip deleted successfully');
+              if (onTripDeleted) {
+                onTripDeleted();
+              }
+            } catch (error: any) {
+              showError(error.message || 'Failed to delete trip');
+            } finally {
+              setIsDeleting(false);
+            }
+          },
+        },
+      ],
+      { cancelable: true }
+    );
+  };
+
   // Format timestamp for display
   const formatDateTime = (isoString: string): string => {
     const date = new Date(isoString);
-    return date.toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
+    const timeString = date.toLocaleString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
     });
+    const dayString = date.toLocaleString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    });
+    return `${timeString}, ${dayString}`;
   };
 
   // Format duration in seconds to readable format
@@ -68,14 +134,23 @@ export const TripCard: React.FC<TripCardProps> = ({ trip }) => {
     ? `${trip.distance_miles.toFixed(2)} miles` 
     : 'N/A';
 
-  const tripSummary = `Trip ${trip.status === 'completed' ? 'completed' : trip.status}. Mode: ${modeLabel}. Boldness: ${trip.boldness}. Distance: ${distanceText}. Started ${formatDateTime(trip.start_time)}. ${trip.end_time ? `Ended ${formatDateTime(trip.end_time)}.` : 'Still in progress.'} Duration: ${formatDuration(trip.duration_seconds)}.`;
+  // Check grading availability
+  const canGrade = canGradeTrip(trip);
+  const remainingTime = getRemainingGradingTime(trip);
 
-  const isClickable = trip.status === 'active' || trip.status === 'paused' || trip.status === 'completed';
+  const tripSummary = `Trip ${trip.status === 'completed' ? 'completed' : trip.status}. Mode: ${modeLabel}. Boldness: ${trip.boldness}. Distance: ${distanceText}. Started ${formatDateTime(trip.start_time)}. ${trip.end_time ? `Ended ${formatDateTime(trip.end_time)}.` : 'Still in progress.'} Duration: ${formatDuration(trip.duration_seconds)}.${canGrade ? ' Grading available.' : ''}`;
+
+  const isActive = trip.status === 'active' || trip.status === 'paused';
+  const isClickable = isActive || trip.status === 'completed';
   const CardWrapper = isClickable ? TouchableOpacity : View;
 
   return (
     <CardWrapper 
-      style={[styles.card, isClickable && styles.clickableCard]} 
+      style={[
+        styles.card, 
+        isClickable && styles.clickableCard,
+        isHighlighted && styles.highlightedCard
+      ]} 
       accessibilityRole={isClickable ? "button" : "summary"}
       accessibilityLabel={isClickable ? `${tripSummary} Tap to view details.` : tripSummary}
       accessibilityHint={isClickable ? "Tap to view trip details" : undefined}
@@ -86,12 +161,19 @@ export const TripCard: React.FC<TripCardProps> = ({ trip }) => {
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.modeText}>{modeLabel}</Text>
-          <Text 
-            style={styles.statusBadge}
-            accessibilityLabel={`Trip ${trip.status}`}
-          >
-            {trip.status === 'active' ? '🔴 Active' : trip.status === 'paused' ? '⏸ Paused' : '✓ Completed'}
-          </Text>
+          <View style={styles.statusRow}>
+            <Text 
+              style={styles.statusBadge}
+              accessibilityLabel={`Trip ${trip.status}`}
+            >
+              {trip.status === 'active' ? '🔴 Active' : trip.status === 'paused' ? '⏸ Paused' : '✓ Completed'}
+            </Text>
+            {canGrade && (
+              <Text style={styles.gradingBadge}>
+                ⭐ Grading Available
+              </Text>
+            )}
+          </View>
         </View>
         <View style={styles.headerRight}>
           <Text style={styles.durationLabel}>Distance</Text>
@@ -129,6 +211,62 @@ export const TripCard: React.FC<TripCardProps> = ({ trip }) => {
           </Text>
         </View>
       )}
+
+      {canGrade && (
+        <View style={styles.row}>
+          <Text style={styles.label}>Grading:</Text>
+          <Text style={[styles.value, styles.gradingText]}>
+            {formatRemainingTime(remainingTime)}
+          </Text>
+        </View>
+      )}
+
+      {isActive && (
+        <View style={styles.actionButtons}>
+          <TouchableOpacity
+            style={[styles.actionButton, styles.resumeButton]}
+            onPress={handleResume}
+            accessibilityRole="button"
+            accessibilityLabel="Resume trip"
+            accessibilityHint="Navigate to active trip screen to continue recording"
+            disabled={isEnding || isDeleting}
+          >
+            <Text style={styles.resumeButtonText}>▶️ Resume</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={[styles.actionButton, styles.endButton]}
+            onPress={handleEndTrip}
+            accessibilityRole="button"
+            accessibilityLabel="End trip"
+            accessibilityHint="Stop recording and complete this trip"
+            disabled={isEnding || isDeleting}
+          >
+            {isEnding ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Text style={styles.endButtonText}>⏹️ End Trip</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <View style={styles.deleteButtonContainer}>
+        <TouchableOpacity
+          style={[styles.deleteButton, isDeleting && styles.deleteButtonDisabled]}
+          onPress={handleDeleteTrip}
+          accessibilityRole="button"
+          accessibilityLabel="Delete trip"
+          accessibilityHint="Permanently delete this trip"
+          disabled={isDeleting || isEnding}
+        >
+          {isDeleting ? (
+            <ActivityIndicator size="small" color="#FF3B30" />
+          ) : (
+            <Text style={styles.deleteButtonText}>🗑️ Delete Trip</Text>
+          )}
+        </TouchableOpacity>
+      </View>
     </CardWrapper>
   );
 };
@@ -149,6 +287,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E5E5',
   },
+  highlightedCard: {
+    backgroundColor: '#FFFEF7',
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -160,6 +301,12 @@ const styles = StyleSheet.create({
   },
   headerLeft: {
     flex: 1,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   headerRight: {
     alignItems: 'flex-end',
@@ -174,6 +321,15 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#666',
+  },
+  gradingBadge: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#FF9500',
+    backgroundColor: '#FFF3E0',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
   },
   durationLabel: {
     fontSize: 12,
@@ -200,5 +356,67 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#333',
     flex: 1,
+  },
+  gradingText: {
+    color: '#FF9500',
+    fontWeight: '600',
+  },
+  actionButtons: {
+    flexDirection: 'row',
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E5E5',
+    gap: 8,
+  },
+  actionButton: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+  },
+  resumeButton: {
+    backgroundColor: '#007AFF',
+  },
+  resumeButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  endButton: {
+    backgroundColor: '#FF3B30',
+  },
+  endButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  deleteButtonContainer: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F0',
+  },
+  deleteButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF5F5',
+    borderWidth: 1,
+    borderColor: '#FFE0E0',
+    minHeight: 44,
+  },
+  deleteButtonDisabled: {
+    opacity: 0.5,
+  },
+  deleteButtonText: {
+    color: '#FF3B30',
+    fontSize: 13,
+    fontWeight: '600',
   },
 });

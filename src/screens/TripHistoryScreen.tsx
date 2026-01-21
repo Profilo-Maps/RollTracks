@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,28 +8,76 @@ import {
   RefreshControl,
 } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
+import { RouteProp } from '@react-navigation/native';
 import { TripCard } from '../components';
 import { useToast } from '../contexts/ToastContext';
 import { useServices } from '../contexts/ServicesContext';
+import { useAuth } from '../contexts/AuthContext';
 import { Trip } from '../types';
 import { handleError } from '../utils/errors';
+
+// Define route params type
+type TripHistoryScreenRouteProp = RouteProp<{
+  History: { highlightTripId?: string };
+}, 'History'>;
+
+interface TripHistoryScreenProps {
+  route: TripHistoryScreenRouteProp;
+}
 
 /**
  * TripHistoryScreen displays a list of all trips
  * Fetches trips from LocalStorageAdapter ordered by start_time DESC (most recent first)
  * Includes pull-to-refresh functionality and empty state handling
- * Requirements: 3.1, 3.3
+ * Supports highlighting a specific trip when navigated from HomeScreen
+ * Requirements: 3.1, 3.3, 4.4
  */
-export const TripHistoryScreen: React.FC = () => {
-  const { showError } = useToast();
+export const TripHistoryScreen: React.FC<TripHistoryScreenProps> = ({ route }) => {
+  const { showError, showSuccess } = useToast();
+  const { user } = useAuth();
   const isFocused = useIsFocused();
   const [trips, setTrips] = useState<Trip[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [highlightedTripId, setHighlightedTripId] = useState<string | null>(null);
+  
+  // Ref for FlatList to enable scrolling to specific trip
+  const flatListRef = useRef<FlatList<Trip>>(null);
 
-  // Get TripService from context
-  const { tripService } = useServices();
+  // Get services from context
+  const { tripService, storageAdapter } = useServices();
+
+  // Extract highlightTripId from route params
+  const { highlightTripId } = route.params || {};
+
+  // Handle trip highlighting when navigated from HomeScreen
+  // Requirement: 4.4
+  useEffect(() => {
+    if (highlightTripId && trips.length > 0) {
+      // Find the index of the trip to highlight
+      const tripIndex = trips.findIndex(trip => trip.id === highlightTripId);
+      
+      if (tripIndex !== -1) {
+        // Set highlighted trip ID for visual feedback
+        setHighlightedTripId(highlightTripId);
+        
+        // Scroll to the trip after a short delay to ensure list is rendered
+        setTimeout(() => {
+          flatListRef.current?.scrollToIndex({
+            index: tripIndex,
+            animated: true,
+            viewPosition: 0.5, // Center the item in the viewport
+          });
+        }, 300);
+        
+        // Clear highlight after 3 seconds
+        setTimeout(() => {
+          setHighlightedTripId(null);
+        }, 3000);
+      }
+    }
+  }, [highlightTripId, trips]);
 
   // Load trips when screen comes into focus
   useEffect(() => {
@@ -61,6 +109,23 @@ export const TripHistoryScreen: React.FC = () => {
     setError(null);
     
     try {
+      // First, try to fetch data from server if user is logged in
+      if (user && storageAdapter.fetchUserDataFromServer) {
+        try {
+          const result = await storageAdapter.fetchUserDataFromServer(user.id);
+          if (result.success) {
+            showSuccess('Synced with server');
+          } else {
+            console.warn('Server sync failed:', result.error);
+            // Continue with local data even if server sync fails
+          }
+        } catch (syncError) {
+          console.error('Error syncing with server:', syncError);
+          // Continue with local data even if server sync fails
+        }
+      }
+
+      // Load trips from local storage (which now includes server data if sync succeeded)
       const data = await tripService.getTrips();
       setTrips(data);
     } catch (fetchError: any) {
@@ -70,12 +135,22 @@ export const TripHistoryScreen: React.FC = () => {
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [user, storageAdapter, tripService, showError, showSuccess]);
 
   // Render individual trip item
-  const renderTripItem = ({ item }: { item: Trip }) => (
-    <TripCard trip={item} />
-  );
+  const renderTripItem = ({ item }: { item: Trip }) => {
+    const isHighlighted = item.id === highlightedTripId;
+    return (
+      <View style={isHighlighted ? styles.highlightedTripContainer : undefined}>
+        <TripCard 
+          trip={item} 
+          onTripEnded={loadTrips} 
+          onTripDeleted={loadTrips}
+          isHighlighted={isHighlighted}
+        />
+      </View>
+    );
+  };
 
   // Empty state component
   const renderEmptyState = () => {
@@ -177,6 +252,7 @@ export const TripHistoryScreen: React.FC = () => {
         renderErrorState()
       ) : (
         <FlatList
+          ref={flatListRef}
           data={trips}
           renderItem={renderTripItem}
           keyExtractor={(item) => item.id}
@@ -197,6 +273,18 @@ export const TripHistoryScreen: React.FC = () => {
           showsVerticalScrollIndicator={true}
           accessible={false}
           accessibilityLabel="List of recorded trips"
+          onScrollToIndexFailed={(info) => {
+            // Handle scroll failure gracefully
+            console.warn('Failed to scroll to trip:', info);
+            // Try scrolling to offset instead
+            const wait = new Promise(resolve => setTimeout(resolve, 500));
+            wait.then(() => {
+              flatListRef.current?.scrollToOffset({
+                offset: info.averageItemLength * info.index,
+                animated: true,
+              });
+            });
+          }}
         />
       )}
     </View>
@@ -291,5 +379,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#999',
     fontStyle: 'italic',
+  },
+  highlightedTripContainer: {
+    backgroundColor: '#FFF9E6',
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#FFD700',
+    padding: 4,
+    marginBottom: 12,
+    shadowColor: '#FFD700',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
   },
 });

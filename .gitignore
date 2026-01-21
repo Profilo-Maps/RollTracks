@@ -74,9 +74,13 @@ yarn-error.log
 !.yarn/sdks
 !.yarn/versions
 
-# Environment variables
+# Environment variables - NEVER COMMIT THESE
 .env
+.env.local
+.env.development
+.env.production
 src/config/supabase.config.ts
+src/config/mapbox.config.ts
 
 # Map tiles (large files - regenerate with npm run copy-tiles)
 android/app/src/main/assets/sf_tiles/

@@ -25,7 +25,8 @@ import {
   StartTripScreen,
   ActiveTripScreen,
   TripSummaryScreen,
-  TripHistoryScreen 
+  TripHistoryScreen,
+  HomeScreen
 } from './src/screens';
 import { migrateData, needsMigration } from './src/utils/migration';
 import { TripService } from './src/services/TripService';
@@ -34,8 +35,19 @@ import { SyncService } from './src/services/SyncService';
 import { SyncStatusIndicator } from './src/components/SyncStatusIndicator';
 import { logEnvironmentValidation } from './src/utils/envValidation';
 import { useAuth } from './src/contexts/AuthContext';
-import { syncEvents } from './src/utils/syncEvents';
 import { useToast } from './src/contexts/ToastContext';
+import { syncEvents } from './src/utils/syncEvents';
+import { SyncDebugger } from './src/utils/debugSync';
+
+// Add global debug functions for development
+if (__DEV__) {
+  (globalThis as any).debugSync = {
+    getQueue: SyncDebugger.getQueueItems,
+    clearQueue: SyncDebugger.clearQueue,
+    removeFailedItems: SyncDebugger.removeFailedItems,
+  };
+  console.log('Debug functions available: globalThis.debugSync.getQueue(), globalThis.debugSync.clearQueue(), globalThis.debugSync.removeFailedItems()');
+}
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -110,14 +122,27 @@ const CustomTabBar = ({ state, descriptors, navigation }: any) => {
   );
 };
 
-// Tab Navigator with all screens
+// Auth Stack for login/register screens
+function AuthStack() {
+  return (
+    <Stack.Navigator
+      screenOptions={{
+        headerShown: false,
+      }}
+    >
+      <Stack.Screen name="Login" component={LoginScreen} />
+      <Stack.Screen name="Register" component={RegisterScreen} />
+    </Stack.Navigator>
+  );
+}
+
+// Main Tab Navigator for authenticated users
 function MainTabs({ syncService }: { syncService: SyncService | null }) {
-  const { user } = useAuth();
   const { showSuccess, showError } = useToast();
 
   // Listen for sync events
   useEffect(() => {
-    const unsubscribe = syncEvents.subscribe((type, message) => {
+    const unsubscribe = syncEvents.subscribe((type: string, message: string) => {
       if (type === 'success') {
         showSuccess(message);
       } else {
@@ -130,7 +155,7 @@ function MainTabs({ syncService }: { syncService: SyncService | null }) {
 
   return (
     <Tab.Navigator
-      initialRouteName={user ? "StartTrip" : "Login"}
+      initialRouteName="StartTrip"
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={({ navigation, route }) => ({
         headerShown: true,
@@ -156,28 +181,21 @@ function MainTabs({ syncService }: { syncService: SyncService | null }) {
       })}
     >
       <Tab.Screen 
-        name="Login" 
-        component={LoginScreen}
-        options={{
-          tabBarButton: () => null, // Hide from tab bar
-          headerShown: false,
-        }}
-      />
-      <Tab.Screen 
-        name="Register" 
-        component={RegisterScreen}
-        options={{
-          tabBarButton: () => null, // Hide from tab bar
-          headerShown: false,
-        }}
-      />
-      <Tab.Screen 
         name="StartTrip" 
         component={StartTripScreen}
         options={{
           tabBarLabel: 'Record',
           tabBarIcon: () => <Text style={{ fontSize: 18, color: '#FF0000' }}>●</Text>,
           headerTitle: 'Start Trip',
+        }}
+      />
+      <Tab.Screen 
+        name="Home" 
+        component={HomeScreen}
+        options={{
+          tabBarLabel: 'Home',
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18, color }}>🏠</Text>,
+          headerTitle: 'Home',
         }}
       />
       <Tab.Screen 
@@ -215,6 +233,22 @@ function MainTabs({ syncService }: { syncService: SyncService | null }) {
       />
     </Tab.Navigator>
   );
+}
+
+// Root navigator that switches between Auth and Main based on authentication state
+function RootNavigator({ syncService }: { syncService: SyncService | null }) {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#007AFF" />
+        <Text style={styles.loadingText}>Loading...</Text>
+      </View>
+    );
+  }
+
+  return user ? <MainTabs syncService={syncService} /> : <AuthStack />;
 }
 
 function App() {
@@ -294,7 +328,7 @@ function App() {
       if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
         console.log('App coming to foreground');
         try {
-          const activeTrip = await tripService.current.getActiveTrip();
+          const activeTrip = tripService.current ? await tripService.current.getActiveTrip() : null;
           if (activeTrip && navigationRef.current) {
             console.log('Active trip found, navigating to ActiveTrip screen');
             navigationRef.current?.navigate('ActiveTrip', { tripId: activeTrip.id });
@@ -340,7 +374,7 @@ function App() {
             <ToastProvider>
               <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
               <NavigationContainer ref={navigationRef}>
-                <MainTabs syncService={syncService.current} />
+                <RootNavigator syncService={syncService.current} />
               </NavigationContainer>
             </ToastProvider>
           </ModeProvider>

@@ -12,10 +12,12 @@ import { useServices } from '../contexts/ServicesContext';
 import { GPSService } from '../services/GPSService';
 import { obstacleService } from '../services/ObstacleService';
 import { MapView } from '../components/MapView';
+import { MapViewMapbox } from '../components/MapViewMapbox';
 import { FeaturePopup } from '../components/FeaturePopup';
 import { RatingModal } from '../components/RatingModal';
 import { Trip, LocationPoint, ObstacleFeature, ObstacleFeatureWithRating } from '../types';
 import { handleError } from '../utils/errors';
+import { FeatureFlags } from '../config/features';
 
 export const ActiveTripScreen: React.FC = () => {
   const navigation = useNavigation();
@@ -27,6 +29,7 @@ export const ActiveTripScreen: React.FC = () => {
   const [currentLocation, setCurrentLocation] = useState<LocationPoint | null>(null);
   const [routePoints, setRoutePoints] = useState<LocationPoint[]>([]);
   const [nearbyObstacles, setNearbyObstacles] = useState<ObstacleFeature[]>([]);
+  const [encounteredObstacles, setEncounteredObstacles] = useState<ObstacleFeature[]>([]);
   const [isObstacleServiceReady, setIsObstacleServiceReady] = useState(false);
   
   // Rating feature state
@@ -72,26 +75,6 @@ export const ActiveTripScreen: React.FC = () => {
     };
     loadExistingPoints();
     
-    // Load existing ratings for current trip
-    const loadExistingRatings = async () => {
-      if (activeTrip) {
-        try {
-          const ratings = await ratingService.getRatingsForTrip(activeTrip.id);
-          const ratedIds = ratings.map(r => r.id);
-          const ratingsMap: Record<string, number> = {};
-          ratings.forEach(r => {
-            ratingsMap[r.id] = r.userRating;
-          });
-          setRatedFeatureIds(ratedIds);
-          setRatedFeatureRatings(ratingsMap);
-          console.log(`Loaded ${ratedIds.length} existing ratings for trip`);
-        } catch (error) {
-          console.error('Error loading existing ratings:', error);
-        }
-      }
-    };
-    loadExistingRatings();
-    
     // Subscribe to GPS updates
     const handleLocationUpdate = (location: LocationPoint) => {
       setCurrentLocation(location);
@@ -109,8 +92,71 @@ export const ActiveTripScreen: React.FC = () => {
       // Don't stop GPS tracking on unmount - let it continue
       // Clean up obstacle service
       obstacleService.cleanup();
+      // Clear encountered obstacles when leaving the screen
+      setEncounteredObstacles([]);
     };
   }, []);
+
+  // Load existing ratings when both activeTrip and obstacle service are ready
+  useEffect(() => {
+    const loadExistingRatings = async () => {
+      if (activeTrip && isObstacleServiceReady) {
+        try {
+          const ratings = await ratingService.getRatingsForTrip(activeTrip.id);
+          const ratedIds = ratings.map(r => r.id);
+          const ratingsMap: Record<string, number> = {};
+          ratings.forEach(r => {
+            ratingsMap[r.id] = r.userRating;
+          });
+          setRatedFeatureIds(ratedIds);
+          setRatedFeatureRatings(ratingsMap);
+          console.log(`Loaded ${ratedIds.length} existing ratings for trip`);
+          
+          // Add rated features to encountered obstacles so they remain visible
+          if (ratings.length > 0) {
+            const ratedObstacles: ObstacleFeature[] = [];
+            ratings.forEach(rating => {
+              // Create obstacle feature from rating data
+              // Extract coordinates from geometry (GeoJSON format: [longitude, latitude])
+              const [longitude, latitude] = rating.geometry.coordinates;
+              const obstacle: ObstacleFeature = {
+                id: rating.id,
+                latitude: latitude,
+                longitude: longitude,
+                attributes: rating.properties || {}
+              };
+              ratedObstacles.push(obstacle);
+            });
+            
+            setEncounteredObstacles(prev => {
+              const combined = [...prev];
+              ratedObstacles.forEach(ratedObstacle => {
+                const alreadyExists = combined.some(existing => existing.id === ratedObstacle.id);
+                if (!alreadyExists) {
+                  combined.push(ratedObstacle);
+                }
+              });
+              return combined;
+            });
+            
+            console.log(`Added ${ratedObstacles.length} rated obstacles to encountered list`);
+          }
+        } catch (error) {
+          console.error('Error loading existing ratings:', error);
+        }
+      }
+    };
+    
+    loadExistingRatings();
+  }, [activeTrip, isObstacleServiceReady]);
+
+  // Clear encountered obstacles when active trip changes (new trip started)
+  useEffect(() => {
+    if (activeTrip) {
+      console.log(`Clearing encountered obstacles for new trip: ${activeTrip.id}`);
+      setEncounteredObstacles([]);
+    }
+  }, [activeTrip?.id]);
 
   // Reload trip when screen comes into focus
   useEffect(() => {
@@ -125,19 +171,48 @@ export const ActiveTripScreen: React.FC = () => {
     if (currentLocation && isObstacleServiceReady) {
       try {
         console.log(`Querying obstacles at (${currentLocation.latitude}, ${currentLocation.longitude}) within 50m`);
-        const obstacles = obstacleService.queryNearby({
+        const newNearbyObstacles = obstacleService.queryNearby({
           latitude: currentLocation.latitude,
           longitude: currentLocation.longitude,
           radiusMeters: 50
         });
-        console.log(`Found ${obstacles.length} nearby obstacles`);
-        setNearbyObstacles(obstacles);
+        console.log(`Found ${newNearbyObstacles.length} nearby obstacles`);
+        
+        // Update encountered obstacles by adding any new ones
+        setEncounteredObstacles(prevEncountered => {
+          const allEncounteredObstacles = [...prevEncountered];
+          let newObstaclesCount = 0;
+          
+          // Add any new obstacles that haven't been encountered before
+          newNearbyObstacles.forEach(newObstacle => {
+            const alreadyEncountered = allEncounteredObstacles.some(
+              existing => existing.id === newObstacle.id
+            );
+            if (!alreadyEncountered) {
+              allEncounteredObstacles.push(newObstacle);
+              newObstaclesCount++;
+              console.log(`New obstacle encountered: ${newObstacle.id}`);
+            }
+          });
+          
+          if (newObstaclesCount > 0) {
+            console.log(`Added ${newObstaclesCount} new obstacles. Total encountered: ${allEncounteredObstacles.length}`);
+          }
+          
+          return allEncounteredObstacles;
+        });
       } catch (error) {
         console.error('Error querying nearby obstacles:', error);
         // Don't show error to user - obstacles are optional
       }
     }
   }, [currentLocation, isObstacleServiceReady]);
+
+  // Update nearby obstacles display whenever encountered obstacles change
+  useEffect(() => {
+    setNearbyObstacles(encounteredObstacles);
+    console.log(`Total obstacles visible: ${encounteredObstacles.length}`);
+  }, [encounteredObstacles]);
 
   const loadActiveTrip = async () => {
     setLoading(true);
@@ -150,7 +225,7 @@ export const ActiveTripScreen: React.FC = () => {
         trip = await tripService.getTrip(tripIdFromRoute);
         
         // Verify the trip is actually active
-        if (trip && trip.status !== 'active' && trip.status !== 'paused') {
+        if (trip && trip.status !== 'active') {
           console.warn('Trip found but not active:', trip.status);
           trip = null;
         }
@@ -251,15 +326,9 @@ export const ActiveTripScreen: React.FC = () => {
     }
 
     try {
-      if (selectedFeature.isRated) {
-        // Update existing rating
-        await ratingService.updateRating(selectedFeature.id, activeTrip.id, rating);
-        showSuccess('Rating updated successfully');
-      } else {
-        // Create new rating
-        await ratingService.createRating(selectedFeature, activeTrip.id, rating);
-        showSuccess('Feature rated successfully');
-      }
+      // Always call createRating - the service will handle existing ratings internally
+      await ratingService.createRating(selectedFeature, activeTrip, rating);
+      showSuccess('Feature rated successfully');
 
       // Update rated feature IDs and ratings
       const ratings = await ratingService.getRatingsForTrip(activeTrip.id);
@@ -309,9 +378,12 @@ export const ActiveTripScreen: React.FC = () => {
     );
   }
 
+  // Select map component based on feature flag
+  const MapComponent = FeatureFlags.USE_MAPBOX_VECTOR_TILES ? MapViewMapbox : MapView;
+
   return (
     <View style={styles.container}>
-      <MapView
+      <MapComponent
         currentLocation={currentLocation}
         routePoints={routePoints}
         obstacleFeatures={nearbyObstacles}
@@ -319,6 +391,7 @@ export const ActiveTripScreen: React.FC = () => {
         onFeatureTap={handleFeatureTap}
         ratedFeatureIds={ratedFeatureIds}
         ratedFeatureRatings={ratedFeatureRatings}
+        enableLazyLoading={false}
       />
       
       {selectedFeature && (

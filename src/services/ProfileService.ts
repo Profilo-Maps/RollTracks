@@ -49,7 +49,7 @@ export class ProfileService {
    * @throws Error if creation fails or validation fails
    */
   async createProfile(profileData: {
-    user_id?: string;
+    user_id: string; // Required in cloud mode
     age: number;
     mode_list: Mode[];
   }): Promise<UserProfile> {

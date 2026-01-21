@@ -1,5 +1,5 @@
 // Storage adapter interface types
-import { UserProfile, Trip, LocationPoint } from '../types';
+import { UserProfile, Trip, LocationPoint, RatedFeature } from '../types';
 
 export interface StorageAdapter {
   // Profile operations
@@ -19,4 +19,13 @@ export interface StorageAdapter {
   saveGPSPoints(points: LocationPoint[]): Promise<void>;
   appendGPSPoint(point: LocationPoint): Promise<void>;
   clearGPSPoints(): Promise<void>;
+
+  // Rated features operations
+  getRatedFeatures(): Promise<RatedFeature[]>;
+  saveRatedFeature(feature: RatedFeature): Promise<void>;
+  getRatedFeaturesForTrip(tripId: string): Promise<RatedFeature[]>;
+  updateRatedFeature(featureId: string, tripId: string, updates: Partial<RatedFeature>): Promise<void>;
+
+  // Sync operations (only available in HybridStorageAdapter)
+  fetchUserDataFromServer?(userId: string): Promise<{ success: boolean; error?: string }>;
 }

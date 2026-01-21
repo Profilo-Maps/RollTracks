@@ -57,8 +57,7 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ navigation }) =>
       }
 
       await signUp(displayName.trim(), password);
-      // Navigate to StartTrip screen after successful registration
-      navigation.navigate('StartTrip');
+      // Navigation will be handled automatically by auth state change
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Registration failed');
     } finally {
