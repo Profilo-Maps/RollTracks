@@ -87,3 +87,6 @@ android/app/src/main/assets/sf_tiles/
 
 # Supabase config with credentials
 src/config/supabase.config.ts
+
+# Kiro specs
+.kiro/specs/

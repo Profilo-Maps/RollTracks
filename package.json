@@ -10,7 +10,8 @@
     "test": "jest",
     "copy-tiles": "node scripts/copy-tiles-to-assets.js",
     "copy-geojson": "node scripts/copy-geojson-to-assets.js",
-    "prebuild": "npm run copy-tiles && npm run copy-geojson"
+    "prebuild": "npm run copy-tiles && npm run copy-geojson",
+    "validate:imports": "node scripts/validate-imports.js"
   },
   "dependencies": {
     "@mapbox/polyline": "^1.2.1",

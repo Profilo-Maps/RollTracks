@@ -46,7 +46,7 @@ export class TripService {
         user_id: data.userId,
         mode: data.mode,
         boldness: data.boldness,
-        purpose: data.purpose,
+        purpose: data.purpose || null,
         start_time: now,
         end_time: null,
         duration_seconds: null,
@@ -55,6 +55,7 @@ export class TripService {
         status: 'active',
         created_at: now,
         updated_at: now,
+        synced_at: null,
       };
 
       await this.storageAdapter.saveTrip(newTrip);

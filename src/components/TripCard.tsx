@@ -133,7 +133,7 @@ export const TripCard: React.FC<TripCardProps> = ({ trip, onTripEnded, onTripDel
     }
   };
 
-  const modeLabel = MODE_LABELS[trip.mode] || trip.mode;
+  const modeLabel = MODE_LABELS[trip.mode as Mode] || trip.mode;
   const distanceText = trip.distance_miles !== null 
     ? `${trip.distance_miles.toFixed(2)} miles` 
     : 'N/A';

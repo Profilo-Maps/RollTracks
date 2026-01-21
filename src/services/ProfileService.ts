@@ -73,6 +73,7 @@ export class ProfileService {
         trip_history_ids: [],
         created_at: now,
         updated_at: now,
+        tourCompleted: false, // Initialize tour as not completed
       };
 
       await this.storageAdapter.saveProfile(newProfile);
@@ -110,6 +111,7 @@ export class ProfileService {
   async updateProfile(updates: {
     age?: number;
     mode_list?: Mode[];
+    tourCompleted?: boolean;
   }): Promise<UserProfile> {
     try {
       // Get existing profile

@@ -109,7 +109,7 @@ RollTracks includes optional cloud synchronization using Supabase for multi-devi
 3. **Apply Database Migrations**
    - Go to Supabase Dashboard → SQL Editor
    - Run each migration file from `supabase/migrations/` in order
-   - See [docs/SupabaseSetup.md](docs/SupabaseSetup.md) for detailed instructions
+   - Follow Supabase documentation for migration setup
 
 4. **Install Dependencies**
    ```bash
@@ -132,8 +132,6 @@ If Supabase is not configured, the app runs in offline-only mode:
 - All data stored locally on device
 - No cloud sync or multi-device support
 - Full functionality for single-device use
-
-For complete setup instructions, see [docs/SupabaseSetup.md](docs/SupabaseSetup.md)
 
 ## Map Visualization
 
@@ -160,7 +158,7 @@ The tiles will be automatically included in the APK. No manual device setup requ
 
 ### Component Documentation
 
-For detailed MapView component documentation, see [docs/MapView.md](docs/MapView.md)
+For detailed MapView component documentation, see [docs/architecture/MapView.md](docs/architecture/MapView.md)
 
 # Learn More
 

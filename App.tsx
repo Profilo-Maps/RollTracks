@@ -18,6 +18,7 @@ import { AuthProvider } from './src/contexts/AuthContext';
 import { ModeProvider } from './src/contexts/ModeContext';
 import { ToastProvider } from './src/contexts/ToastContext';
 import { ServicesProvider } from './src/contexts/ServicesContext';
+import { TourProvider } from './src/contexts/TourContext';
 import { 
   LoginScreen,
   RegisterScreen,
@@ -54,15 +55,17 @@ const Stack = createStackNavigator();
 
 // Profile button component for header
 const ProfileButton = ({ navigation }: any) => (
-  <TouchableOpacity
-    onPress={() => navigation.navigate('Profile')}
-    style={styles.profileButton}
-    accessibilityLabel="Open profile"
-    accessibilityRole="button"
-    accessibilityHint="Tap to view and edit your profile"
-  >
-    <Text style={styles.profileButtonText}>👤</Text>
-  </TouchableOpacity>
+  <View nativeID="profile_nav_button">
+    <TouchableOpacity
+      onPress={() => navigation.navigate('Profile')}
+      style={styles.profileButton}
+      accessibilityLabel="Open profile"
+      accessibilityRole="button"
+      accessibilityHint="Tap to view and edit your profile"
+    >
+      <Text style={styles.profileButtonText}>👤</Text>
+    </TouchableOpacity>
+  </View>
 );
 
 // Custom tab bar component
@@ -200,7 +203,7 @@ function MainTabs({ syncService }: { syncService: SyncService | null }) {
       />
       <Tab.Screen 
         name="History" 
-        component={TripHistoryScreen}
+        component={TripHistoryScreen as any}
         options={{
           tabBarLabel: 'History',
           tabBarIcon: ({ color }) => <Text style={{ fontSize: 18, color }}>📋</Text>,
@@ -374,7 +377,9 @@ function App() {
             <ToastProvider>
               <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
               <NavigationContainer ref={navigationRef}>
-                <RootNavigator syncService={syncService.current} />
+                <TourProvider navigationRef={navigationRef}>
+                  <RootNavigator syncService={syncService.current} />
+                </TourProvider>
               </NavigationContainer>
             </ToastProvider>
           </ModeProvider>

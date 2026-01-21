@@ -13,6 +13,8 @@ import { TripCard } from '../components';
 import { useToast } from '../contexts/ToastContext';
 import { useServices } from '../contexts/ServicesContext';
 import { useAuth } from '../contexts/AuthContext';
+import { useTour } from '../contexts/TourContext';
+import { TourOverlay } from '../components/TourOverlay';
 import { Trip } from '../types';
 import { handleError } from '../utils/errors';
 
@@ -35,6 +37,7 @@ interface TripHistoryScreenProps {
 export const TripHistoryScreen: React.FC<TripHistoryScreenProps> = ({ route }) => {
   const { showError, showSuccess } = useToast();
   const { user } = useAuth();
+  const { state: tourState, nextStep, previousStep, dismissTour, completeTour } = useTour();
   const isFocused = useIsFocused();
   const [trips, setTrips] = useState<Trip[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -273,11 +276,12 @@ export const TripHistoryScreen: React.FC<TripHistoryScreenProps> = ({ route }) =
           showsVerticalScrollIndicator={true}
           accessible={false}
           accessibilityLabel="List of recorded trips"
+          nativeID="trip_history_list"
           onScrollToIndexFailed={(info) => {
             // Handle scroll failure gracefully
             console.warn('Failed to scroll to trip:', info);
             // Try scrolling to offset instead
-            const wait = new Promise(resolve => setTimeout(resolve, 500));
+            const wait = new Promise<void>(resolve => setTimeout(() => resolve(), 500));
             wait.then(() => {
               flatListRef.current?.scrollToOffset({
                 offset: info.averageItemLength * info.index,
@@ -285,6 +289,26 @@ export const TripHistoryScreen: React.FC<TripHistoryScreenProps> = ({ route }) =
               });
             });
           }}
+        />
+      )}
+      
+      {/* Tour Overlay - Onboarding Tutorial */}
+      {tourState.isActive && tourState.currentStep === 4 && (
+        <TourOverlay
+          step={{
+            id: 'trip_history',
+            screen: 'TripHistory' as any,
+            title: 'Review Your History',
+            description: 'View all your past trips here. You can see details, filter by date, and analyze your routes.',
+            highlightElement: 'trip_history_list',
+            position: 'top',
+          }}
+          currentStep={tourState.currentStep}
+          totalSteps={tourState.totalSteps}
+          onNext={nextStep}
+          onPrevious={previousStep}
+          onDismiss={dismissTour}
+          onComplete={completeTour}
         />
       )}
     </View>

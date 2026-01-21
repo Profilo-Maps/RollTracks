@@ -9,6 +9,8 @@ import {
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useToast } from '../contexts/ToastContext';
 import { useServices } from '../contexts/ServicesContext';
+import { useTour } from '../contexts/TourContext';
+import { TourOverlay } from '../components/TourOverlay';
 import { GPSService } from '../services/GPSService';
 import { obstacleService } from '../services/ObstacleService';
 import { MapView } from '../components/MapView';
@@ -23,6 +25,7 @@ export const ActiveTripScreen: React.FC = () => {
   const navigation = useNavigation();
   const route = useRoute();
   const { showError, showSuccess } = useToast();
+  const { state: tourState, nextStep, previousStep, dismissTour, completeTour } = useTour();
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [activeTrip, setActiveTrip] = useState<Trip | null>(null);
@@ -409,6 +412,7 @@ export const ActiveTripScreen: React.FC = () => {
         initialRating={selectedFeature?.rating}
         onSubmit={handleRatingSubmit}
         onCancel={handleRatingCancel}
+        nativeID="obstacle_grading_interface"
       />
       
       <View style={styles.overlay}>
@@ -432,6 +436,8 @@ export const ActiveTripScreen: React.FC = () => {
           </TouchableOpacity>
         </View>
       </View>
+      
+      {/* Tour Overlay removed - no longer used in ActiveTripScreen */}
     </View>
   );
 };

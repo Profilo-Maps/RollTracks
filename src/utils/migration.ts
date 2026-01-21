@@ -160,6 +160,7 @@ async function migrateTrips(): Promise<void> {
         status: oldTrip.status || 'completed',
         created_at: oldTrip.created_at || oldTrip.start_time,
         updated_at: new Date().toISOString(),
+        synced_at: null,
       };
 
       return newTrip;

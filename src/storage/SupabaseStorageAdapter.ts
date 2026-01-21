@@ -381,6 +381,7 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       status: data.status,
       created_at: data.created_at,
       updated_at: data.updated_at,
+      synced_at: data.synced_at || null,
     };
   }
 
@@ -399,6 +400,7 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       status: trip.status,
       created_at: trip.created_at,
       updated_at: trip.updated_at,
+      synced_at: null,
     };
   }
 
