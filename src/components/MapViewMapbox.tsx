@@ -28,7 +28,8 @@ type MapMessage =
   | { type: 'updateObstacles'; payload: ObstacleFeature[] }
   | { type: 'updateRatedFeatures'; payload: { ids: string[]; ratings: Record<string, number> } }
   | { type: 'setAllObstacles'; payload: ObstacleFeature[] }
-  | { type: 'enableLazyLoading'; payload: boolean };
+  | { type: 'enableLazyLoading'; payload: boolean }
+  | { type: 'fitToObstacles' };
 
 type WebViewMessage =
   | { type: 'mapReady' }
@@ -191,6 +192,10 @@ export const MapViewMapbox: React.FC<MapViewMapboxProps> = ({
     if (showCompleteRoute && routePoints.length > 0 && isMapReady && isVisible) {
       console.log('Setting complete route with', routePoints.length, 'points');
       sendMessage({ type: 'setRoute', payload: routePoints });
+    } else if (!showCompleteRoute && routePoints.length === 0 && isMapReady && isVisible) {
+      // Clear route when showCompleteRoute is false and no route points
+      console.log('Clearing route');
+      sendMessage({ type: 'clearRoute' });
     }
   }, [showCompleteRoute, routePoints, isMapReady, isVisible]);
 
@@ -208,8 +213,11 @@ export const MapViewMapbox: React.FC<MapViewMapboxProps> = ({
       console.log('MapViewMapbox: Updating rated features:', {
         ratedFeatureIds,
         ratedFeatureRatings,
-        count: ratedFeatureIds.length
+        count: ratedFeatureIds.length,
+        enableLazyLoading
       });
+      
+      // Always send rated features to update the cache
       sendMessage({ 
         type: 'updateRatedFeatures', 
         payload: { 
@@ -218,7 +226,7 @@ export const MapViewMapbox: React.FC<MapViewMapboxProps> = ({
         } 
       });
     }
-  }, [ratedFeatureIds, ratedFeatureRatings, isMapReady, isVisible]);
+  }, [ratedFeatureIds, ratedFeatureRatings, isMapReady, isVisible, enableLazyLoading]);
 
   // Update obstacles (throttled)
   useEffect(() => {
@@ -229,18 +237,23 @@ export const MapViewMapbox: React.FC<MapViewMapboxProps> = ({
       enableLazyLoading
     });
     
-    if (isMapReady && isVisible) {
+    if (isMapReady && isVisible && obstacleFeatures && obstacleFeatures.length > 0) {
       const now = Date.now();
       const timeSinceLastUpdate = now - lastObstacleUpdateTime.current;
       console.log('MapViewMapbox: Time since last obstacle update:', timeSinceLastUpdate, 'ms (throttle:', updateThrottleMs, 'ms)');
       
-      if (timeSinceLastUpdate >= updateThrottleMs) {
+      // For trip summary screen (enableLazyLoading=false), don't throttle the initial load
+      const shouldUpdate = timeSinceLastUpdate >= updateThrottleMs || 
+                          (!enableLazyLoading && lastObstacleUpdateTime.current === 0);
+      
+      if (shouldUpdate) {
         const features = obstacleFeatures || [];
         
         console.log('MapViewMapbox: Updating obstacles:', {
           count: features.length,
           enableLazyLoading,
-          messageType: enableLazyLoading ? 'setAllObstacles' : 'updateObstacles'
+          messageType: enableLazyLoading ? 'setAllObstacles' : 'updateObstacles',
+          isInitialLoad: lastObstacleUpdateTime.current === 0
         });
         
         // Store all obstacles for lazy loading
@@ -249,6 +262,10 @@ export const MapViewMapbox: React.FC<MapViewMapboxProps> = ({
         if (enableLazyLoading) {
           // Send all obstacles to WebView for viewport-based filtering
           sendMessage({ type: 'setAllObstacles', payload: features });
+          // Fit map to show all obstacles (for home screen)
+          if (showCompleteRoute === false && routePoints.length === 0) {
+            sendMessage({ type: 'fitToObstacles' });
+          }
         } else {
           // Legacy mode: send all obstacles directly
           sendMessage({ type: 'updateObstacles', payload: features });
@@ -259,7 +276,7 @@ export const MapViewMapbox: React.FC<MapViewMapboxProps> = ({
         console.log('MapViewMapbox: Obstacle update throttled, skipping');
       }
     }
-  }, [obstacleFeatures, isMapReady, isVisible, enableLazyLoading]);
+  }, [obstacleFeatures, isMapReady, isVisible, enableLazyLoading, showCompleteRoute, routePoints]);
 
   // Send enableLazyLoading setting to WebView
   useEffect(() => {
@@ -1277,6 +1294,44 @@ export const MapViewMapbox: React.FC<MapViewMapboxProps> = ({
           });
         }
         
+        function fitToObstacles() {
+          queueMessage(function() {
+            executeWhenReady(function() {
+              if (allObstacles.length === 0) {
+                console.log('fitToObstacles: No obstacles to fit');
+                return;
+              }
+              
+              console.log('fitToObstacles: Fitting map to', allObstacles.length, 'obstacles');
+              
+              // Create bounds from all obstacles
+              const coords = allObstacles.map(function(feature) {
+                return [feature.longitude, feature.latitude];
+              });
+              
+              if (coords.length === 1) {
+                // Single feature - center on it
+                map.easeTo({
+                  center: coords[0],
+                  zoom: 17,
+                  duration: 1000
+                });
+              } else {
+                // Multiple features - fit bounds
+                const bounds = coords.reduce(function(bounds, coord) {
+                  return bounds.extend(coord);
+                }, new mapboxgl.LngLatBounds(coords[0], coords[0]));
+                
+                map.fitBounds(bounds, { 
+                  padding: 80,
+                  duration: 1000,
+                  maxZoom: 17
+                });
+              }
+            });
+          });
+        }
+        
         function updateVisibleObstacles() {
           if (!lazyLoadingEnabled || allObstacles.length === 0) {
             return;
@@ -1496,6 +1551,9 @@ export const MapViewMapbox: React.FC<MapViewMapboxProps> = ({
                 if (lazyLoadingEnabled && allObstacles.length > 0) {
                   updateVisibleObstacles();
                 }
+                break;
+              case 'fitToObstacles':
+                fitToObstacles();
                 break;
               default:
                 console.warn('Unknown message type:', message.type);

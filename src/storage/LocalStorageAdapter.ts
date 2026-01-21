@@ -63,7 +63,18 @@ export class LocalStorageAdapter implements StorageAdapter {
       if (!tripsJson) {
         return [];
       }
-      return JSON.parse(tripsJson) as Trip[];
+      
+      const allTrips = JSON.parse(tripsJson) as Trip[];
+      
+      // Get current user to filter trips
+      const userJson = await AsyncStorage.getItem('@rolltracks:user');
+      if (!userJson) {
+        return [];
+      }
+      const user = JSON.parse(userJson);
+      
+      // Filter trips by current user
+      return allTrips.filter(trip => trip.user_id === user.id);
     } catch (error) {
       console.error('Error getting trips from local storage:', error);
       throw error;
@@ -200,7 +211,28 @@ export class LocalStorageAdapter implements StorageAdapter {
       if (!featuresJson) {
         return [];
       }
-      return JSON.parse(featuresJson) as RatedFeature[];
+      
+      const allFeatures = JSON.parse(featuresJson) as RatedFeature[];
+      
+      // Get current user to filter features
+      const userJson = await AsyncStorage.getItem('@rolltracks:user');
+      if (!userJson) {
+        return [];
+      }
+      const user = JSON.parse(userJson);
+      
+      // Get user's trips to filter features
+      const tripsJson = await AsyncStorage.getItem(STORAGE_KEYS.TRIPS);
+      if (!tripsJson) {
+        return [];
+      }
+      const allTrips = JSON.parse(tripsJson) as Trip[];
+      const userTripIds = allTrips
+        .filter(trip => trip.user_id === user.id)
+        .map(trip => trip.id);
+      
+      // Filter features by user's trips
+      return allFeatures.filter(feature => userTripIds.includes(feature.tripId));
     } catch (error) {
       console.error('Error getting rated features from local storage:', error);
       // Return empty array on parsing errors to prevent app crashes
