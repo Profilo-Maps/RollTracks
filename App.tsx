@@ -245,8 +245,11 @@ function RootNavigator({ syncService }: { syncService: SyncService | null }) {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.loadingText}>Loading...</Text>
+        <View style={styles.loadingContent}>
+          <Text style={styles.appName}>RollTracks</Text>
+          <ActivityIndicator size="large" color="#007AFF" style={styles.spinner} />
+          <Text style={styles.loadingText}>Loading your data...</Text>
+        </View>
       </View>
     );
   }
@@ -362,8 +365,11 @@ function App() {
     return (
       <SafeAreaProvider>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.loadingText}>Loading...</Text>
+          <View style={styles.loadingContent}>
+            <Text style={styles.appName}>RollTracks</Text>
+            <ActivityIndicator size="large" color="#007AFF" style={styles.spinner} />
+            <Text style={styles.loadingText}>Initializing...</Text>
+          </View>
         </View>
       </SafeAreaProvider>
     );
@@ -394,12 +400,25 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#ffffff',
+  },
+  loadingContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  appName: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    color: '#007AFF',
+    marginBottom: 32,
+  },
+  spinner: {
+    marginVertical: 16,
   },
   loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#666',
+    marginTop: 8,
+    fontSize: 14,
+    color: '#8E8E93',
   },
   profileButton: {
     marginRight: 16,

@@ -276,9 +276,11 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     fontSize: 16,
+    color: '#000',
   },
   passwordInput: {
     fontFamily: Platform.OS === 'android' ? 'normal' : undefined,
+    color: '#000',
   },
   inputSpinner: {
     position: 'absolute',

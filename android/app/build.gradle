@@ -55,9 +55,14 @@ react {
 }
 
 /**
- * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
+ * Set this to true to enable R8 on Release builds to optimize and obfuscate the code.
+ * R8 is the default code shrinker (replaces ProGuard) and provides:
+ * - Code shrinking (removes unused code)
+ * - Code obfuscation (renames classes/methods)
+ * - Resource shrinking (removes unused resources)
+ * - Optimization (improves performance)
  */
-def enableProguardInReleaseBuilds = false
+def enableProguardInReleaseBuilds = true
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
