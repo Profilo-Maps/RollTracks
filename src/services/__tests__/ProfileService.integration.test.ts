@@ -174,4 +174,106 @@ describe('ProfileService Integration Tests', () => {
       expect(stats.totalTrips).toBe(0);
     });
   });
+
+  describe('tourCompleted flag', () => {
+    it('should initialize tourCompleted to false when creating a profile', async () => {
+      const profileData = {
+        age: 25,
+        mode_list: ['wheelchair'] as Mode[],
+      };
+
+      const result = await profileService.createProfile(profileData);
+
+      expect(result).toBeDefined();
+      expect(result.tourCompleted).toBe(false);
+    });
+
+    it('should return tourCompleted flag when getting profile', async () => {
+      const profileData = {
+        age: 25,
+        mode_list: ['wheelchair'] as Mode[],
+      };
+
+      await profileService.createProfile(profileData);
+      const result = await profileService.getProfile();
+
+      expect(result).toBeDefined();
+      expect(result?.tourCompleted).toBe(false);
+    });
+
+    it('should update tourCompleted flag to true', async () => {
+      const profileData = {
+        age: 25,
+        mode_list: ['wheelchair'] as Mode[],
+      };
+
+      await profileService.createProfile(profileData);
+      
+      const result = await profileService.updateProfile({
+        tourCompleted: true,
+      });
+
+      expect(result).toBeDefined();
+      expect(result.tourCompleted).toBe(true);
+    });
+
+    it('should update tourCompleted flag to false', async () => {
+      const profileData = {
+        age: 25,
+        mode_list: ['wheelchair'] as Mode[],
+      };
+
+      await profileService.createProfile(profileData);
+      
+      // First set to true
+      await profileService.updateProfile({ tourCompleted: true });
+      
+      // Then set back to false (for tour restart)
+      const result = await profileService.updateProfile({
+        tourCompleted: false,
+      });
+
+      expect(result).toBeDefined();
+      expect(result.tourCompleted).toBe(false);
+    });
+
+    it('should update tourCompleted along with other profile fields', async () => {
+      const profileData = {
+        age: 25,
+        mode_list: ['wheelchair'] as Mode[],
+      };
+
+      await profileService.createProfile(profileData);
+      
+      const result = await profileService.updateProfile({
+        age: 30,
+        mode_list: ['walking', 'skateboard'] as Mode[],
+        tourCompleted: true,
+      });
+
+      expect(result).toBeDefined();
+      expect(result.age).toBe(30);
+      expect(result.mode_list).toEqual(['walking', 'skateboard']);
+      expect(result.tourCompleted).toBe(true);
+    });
+
+    it('should preserve tourCompleted when updating other fields', async () => {
+      const profileData = {
+        age: 25,
+        mode_list: ['wheelchair'] as Mode[],
+      };
+
+      await profileService.createProfile(profileData);
+      
+      // Set tourCompleted to true
+      await profileService.updateProfile({ tourCompleted: true });
+      
+      // Update age without touching tourCompleted
+      const result = await profileService.updateProfile({ age: 30 });
+
+      expect(result).toBeDefined();
+      expect(result.age).toBe(30);
+      expect(result.tourCompleted).toBe(true); // Should be preserved
+    });
+  });
 });

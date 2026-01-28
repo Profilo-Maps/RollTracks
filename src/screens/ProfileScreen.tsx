@@ -13,6 +13,8 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useServices } from '../contexts/ServicesContext';
+import { useTour } from '../contexts/TourContext';
+import { TourOverlay } from '../components/TourOverlay';
 
 import { ModeSelector } from '../components/ModeSelector';
 import { ProfileStatistics } from '../components/ProfileStatistics';
@@ -24,11 +26,13 @@ export const ProfileScreen: React.FC = () => {
   const navigation = useNavigation();
   const { user, deleteAccount, updateProfile: updateUserProfile, signOut } = useAuth();
   const { showError, showSuccess } = useToast();
+  const { state: tourState, nextStep, previousStep, dismissTour, completeTour, restartTour, startTour } = useTour();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [statistics, setStatistics] = useState<Statistics | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [shouldStartTour, setShouldStartTour] = useState(false);
   
   // Form state
   const [age, setAge] = useState('');
@@ -46,6 +50,22 @@ export const ProfileScreen: React.FC = () => {
   useEffect(() => {
     loadProfile();
   }, [user]);
+
+  // Effect to start tour after profile creation
+  useEffect(() => {
+    if (shouldStartTour && !tourState.isActive && tourState.status === 'not_started') {
+      const initiateTour = async () => {
+        try {
+          await startTour();
+          setShouldStartTour(false);
+        } catch (error) {
+          console.error('Error starting tour:', error);
+          setShouldStartTour(false);
+        }
+      };
+      initiateTour();
+    }
+  }, [shouldStartTour, tourState.isActive, tourState.status, startTour]);
 
   // Refresh statistics when screen comes into focus
   useFocusEffect(
@@ -159,6 +179,8 @@ export const ProfileScreen: React.FC = () => {
     }
     
     setSaving(true);
+    const isNewProfile = !profile; // Track if this is a new profile
+    
     try {
       const profileData = {
         age: parseInt(age, 10),
@@ -195,6 +217,15 @@ export const ProfileScreen: React.FC = () => {
       
       // Exit edit mode
       setIsEditing(false);
+      
+      // If this was a new profile, navigate to Home and trigger tour
+      if (isNewProfile) {
+        if (navigation) {
+          (navigation as any).navigate('Home');
+        }
+        // Set flag to start tour after navigation
+        setShouldStartTour(true);
+      }
     } catch (error: any) {
       const appError = handleError(error);
       showError(appError.message);
@@ -301,16 +332,18 @@ export const ProfileScreen: React.FC = () => {
               <Text style={styles.viewValue}>{profile.age}</Text>
             </TouchableOpacity>
             
-            <TouchableOpacity
-              style={styles.viewRow}
-              onPress={handleEdit}
-              accessibilityLabel="Transportation modes"
-              accessibilityHint="Tap to edit your transportation modes"
-              accessibilityRole="button"
-            >
-              <Text style={styles.viewLabel}>Modes:</Text>
-              <Text style={styles.viewValue}>{formatModeList(profile.mode_list)}</Text>
-            </TouchableOpacity>
+            <View nativeID="mode_list_section">
+              <TouchableOpacity
+                style={styles.viewRow}
+                onPress={handleEdit}
+                accessibilityLabel="Transportation modes"
+                accessibilityHint="Tap to edit your transportation modes"
+                accessibilityRole="button"
+              >
+                <Text style={styles.viewLabel}>Modes:</Text>
+                <Text style={styles.viewValue}>{formatModeList(profile.mode_list)}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
           
           {statistics && <ProfileStatistics statistics={statistics} />}
@@ -323,6 +356,16 @@ export const ProfileScreen: React.FC = () => {
             accessibilityHint="Tap to edit your profile information"
           >
             <Text style={styles.buttonText}>Edit Profile</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.button, styles.buttonSecondary]}
+            onPress={restartTour}
+            accessibilityLabel="Restart tutorial"
+            accessibilityRole="button"
+            accessibilityHint="Tap to restart the onboarding tutorial"
+          >
+            <Text style={styles.buttonSecondaryText}>Restart Tutorial</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -345,6 +388,26 @@ export const ProfileScreen: React.FC = () => {
             <Text style={styles.buttonDangerText}>Delete Account</Text>
           </TouchableOpacity>
         </View>
+        
+        {/* Tour Overlay - Onboarding Tutorial */}
+        {tourState.isActive && tourState.currentStep === 1 && (
+          <TourOverlay
+            step={{
+              id: 'profile_modes',
+              screen: 'Profile',
+              title: 'Customize Your Modes',
+              description: 'Here you can add, remove, or modify your transportation modes for trip recording.',
+              highlightElement: 'mode_list_section',
+              position: 'center',
+            }}
+            currentStep={tourState.currentStep}
+            totalSteps={tourState.totalSteps}
+            onNext={nextStep}
+            onPrevious={previousStep}
+            onDismiss={dismissTour}
+            onComplete={completeTour}
+          />
+        )}
       </ScrollView>
     );
   }

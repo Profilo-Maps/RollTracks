@@ -83,12 +83,9 @@ export function validateEnvironment(): EnvValidationResult {
  */
 function isValidSupabaseUrl(url: string): boolean {
   try {
-    const urlObj = new URL(url);
-    // Check if it's a valid Supabase URL pattern
-    return (
-      urlObj.protocol === 'https:' &&
-      (urlObj.hostname.endsWith('.supabase.co') || urlObj.hostname.endsWith('.supabase.in'))
-    );
+    // Use a simple regex check instead of URL constructor for React Native compatibility
+    const urlPattern = /^https:\/\/[a-zA-Z0-9-]+\.(supabase\.co|supabase\.in)(\/.*)?$/;
+    return urlPattern.test(url);
   } catch (error) {
     return false;
   }

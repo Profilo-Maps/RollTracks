@@ -288,7 +288,6 @@ export const TripSummaryScreen: React.FC = () => {
       <MapComponent
         currentLocation={currentLocation}
         routePoints={routePoints}
-        isPaused={false}
         obstacleFeatures={allEncounteredObstacles}
         showCompleteRoute={true}
         onFeatureTap={handleFeatureTap}

@@ -14,6 +14,7 @@ export const RatingModal: React.FC<RatingModalProps> = ({
   initialRating,
   onSubmit,
   onCancel,
+  nativeID,
 }) => {
   const [rating, setRating] = useState(initialRating || 5);
 
@@ -35,7 +36,7 @@ export const RatingModal: React.FC<RatingModalProps> = ({
       animationType="fade"
       onRequestClose={onCancel}
     >
-      <View style={styles.overlay}>
+      <View style={styles.overlay} nativeID={nativeID}>
         <View style={styles.modalContainer}>
           <Text style={styles.title}>Accessibility Rating</Text>
           

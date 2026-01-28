@@ -5,7 +5,13 @@
  * All Mapbox API credentials are stored server-side, never exposed in the mobile app.
  */
 
-import { supabase } from '../config/supabase.config';
+import { SUPABASE_CONFIG } from '../config/supabase.config';
+import { createClient } from '@supabase/supabase-js';
+
+// Initialize supabase client if configured
+const supabase = SUPABASE_CONFIG.url && SUPABASE_CONFIG.anonKey
+  ? createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey)
+  : null;
 
 export interface TileUsageStats {
   count: number;
@@ -38,6 +44,10 @@ export class MapboxProxyService {
     y: number,
     tilesetId: string = this.DEFAULT_TILESET
   ): Promise<ArrayBuffer> {
+    if (!supabase) {
+      throw new Error('Supabase not configured');
+    }
+
     try {
       // Get current session
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
@@ -67,11 +77,17 @@ export class MapboxProxyService {
       // Convert response to ArrayBuffer
       if (data instanceof ArrayBuffer) {
         return data;
-      } else if (data instanceof Blob) {
-        return await data.arrayBuffer();
-      } else {
-        throw new Error('Unexpected response format from proxy');
+      } else if (typeof data === 'object' && data !== null) {
+        // Try to convert Blob-like object
+        if ('arrayBuffer' in data && typeof (data as any).arrayBuffer === 'function') {
+          return await (data as any).arrayBuffer();
+        }
+        // If it's a plain object with error, throw
+        if ('error' in data) {
+          throw new Error((data as any).error || 'Unknown error from proxy');
+        }
       }
+      throw new Error('Unexpected response format from proxy');
 
     } catch (error) {
       console.error(`Error fetching tile ${z}/${x}/${y}:`, error);
@@ -84,6 +100,10 @@ export class MapboxProxyService {
    * @returns Usage statistics including count, limit, and percentage
    */
   static async getUserUsage(): Promise<TileUsageStats> {
+    if (!supabase) {
+      return { count: 0, limit: 500, percentage: 0 };
+    }
+
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       
@@ -119,6 +139,10 @@ export class MapboxProxyService {
    * @returns Cache statistics including size and hit rate
    */
   static async getCacheStats(): Promise<CacheStats | null> {
+    if (!supabase) {
+      return null;
+    }
+
     try {
       const { data, error } = await supabase.rpc('get_cache_stats');
 
@@ -156,6 +180,10 @@ export class MapboxProxyService {
    * @returns Array of usage records
    */
   static async getUserUsageHistory(hours: number = 24) {
+    if (!supabase) {
+      return [];
+    }
+
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       

@@ -14,3 +14,7 @@ export { ProfileStatistics } from './ProfileStatistics';
 export { MapView } from './MapView';
 export { MapViewMapbox } from './MapViewMapbox';
 export type { MapViewMapboxProps } from './MapViewMapbox';
+export { TourOverlay } from './TourOverlay';
+export type { TourOverlayProps } from './TourOverlay';
+export { HighlightCutout } from './HighlightCutout';
+export type { HighlightCutoutProps } from './HighlightCutout';

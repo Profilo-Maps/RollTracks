@@ -305,7 +305,7 @@ export class AuthService {
       throw new Error('Unauthorized: Cannot delete another user\'s account');
     }
 
-    // Delete user account (cascade will delete all related data)
+    // Delete user account from server (cascade will delete all related data)
     const { error } = await supabase
       .from('user_accounts')
       .delete()
@@ -315,8 +315,61 @@ export class AuthService {
       throw new Error(`Failed to delete account: ${error.message}`);
     }
 
-    // Clear local storage
-    await this.logout();
+    // Clear user's data from local storage
+    // Note: We need to filter out only this user's data, not all data
+    try {
+      // Get all trips and filter out the deleted user's trips
+      const tripsJson = await AsyncStorage.getItem('@rolltracks:trips');
+      if (tripsJson) {
+        const allTrips = JSON.parse(tripsJson);
+        const remainingTrips = allTrips.filter((trip: any) => trip.user_id !== userId);
+        await AsyncStorage.setItem('@rolltracks:trips', JSON.stringify(remainingTrips));
+      }
+
+      // Get all rated features and filter out the deleted user's features
+      const featuresJson = await AsyncStorage.getItem('@rolltracks:rated_features');
+      if (featuresJson) {
+        const allFeatures = JSON.parse(featuresJson);
+        // Get user's trip IDs to filter features
+        const tripsJson = await AsyncStorage.getItem('@rolltracks:trips');
+        const allTrips = tripsJson ? JSON.parse(tripsJson) : [];
+        const userTripIds = allTrips
+          .filter((trip: any) => trip.user_id === userId)
+          .map((trip: any) => trip.id);
+        const remainingFeatures = allFeatures.filter(
+          (feature: any) => !userTripIds.includes(feature.tripId)
+        );
+        await AsyncStorage.setItem('@rolltracks:rated_features', JSON.stringify(remainingFeatures));
+      }
+
+      // Clear sync queue items for this user
+      const queueJson = await AsyncStorage.getItem('@rolltracks:sync_queue');
+      if (queueJson) {
+        const allQueueItems = JSON.parse(queueJson);
+        const remainingQueueItems = allQueueItems.filter((item: any) => item.userId !== userId);
+        await AsyncStorage.setItem('@rolltracks:sync_queue', JSON.stringify(remainingQueueItems));
+      }
+
+      // Clear profile if it belongs to this user
+      const profileJson = await AsyncStorage.getItem('@rolltracks:profile');
+      if (profileJson) {
+        const profile = JSON.parse(profileJson);
+        if (profile.user_id === userId) {
+          await AsyncStorage.removeItem('@rolltracks:profile');
+        }
+      }
+
+      // Clear session and user data
+      await AsyncStorage.multiRemove([
+        SESSION_KEY,
+        USER_KEY,
+        '@rolltracks:active_trip',
+        '@rolltracks:gps_points',
+      ]);
+    } catch (storageError) {
+      console.error('Error cleaning up local storage after account deletion:', storageError);
+      // Continue even if local cleanup fails - server data is already deleted
+    }
   }
 
   // ============================================================================

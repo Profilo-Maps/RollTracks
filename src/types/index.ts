@@ -3,6 +3,9 @@ import { User, Session } from '@supabase/supabase-js';
 // Export database types
 export * from './database.types';
 
+// Export tour types
+export * from './tour.types';
+
 // Mode type enum for RollTracks
 export type Mode = 'wheelchair' | 'assisted_walking' | 'skateboard' | 'scooter' | 'walking';
 
@@ -25,6 +28,7 @@ export interface UserProfile {
   trip_history_ids?: string[]; // References to trips
   created_at: string;
   updated_at: string;
+  tourCompleted?: boolean; // Flag indicating tour completion
 }
 
 // Note: Trip type is imported from database.types.ts
@@ -90,6 +94,7 @@ export interface RatingModalProps {
   initialRating?: number;
   onSubmit: (rating: number) => void;
   onCancel: () => void;
+  nativeID?: string;
 }
 
 export interface FeaturePopupProps {

@@ -99,9 +99,17 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     }
 
     try {
+      // Get current user from AsyncStorage
+      const userJson = await import('@react-native-async-storage/async-storage').then(m => m.default.getItem('@rolltracks:user'));
+      if (!userJson) {
+        return [];
+      }
+      const user = JSON.parse(userJson);
+
       const { data, error } = await supabase
         .from('trips')
         .select('*')
+        .eq('user_id', user.id)
         .order('start_time', { ascending: false });
 
       if (error) throw error;
@@ -223,9 +231,18 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     }
 
     try {
+      // Get current user from AsyncStorage
+      const userJson = await import('@react-native-async-storage/async-storage').then(m => m.default.getItem('@rolltracks:user'));
+      if (!userJson) {
+        return [];
+      }
+      const user = JSON.parse(userJson);
+
+      // Get rated features by joining with trips to filter by user_id
       const { data, error } = await supabase
         .from('rated_features')
-        .select('*')
+        .select('*, trips!inner(user_id)')
+        .eq('trips.user_id', user.id)
         .order('timestamp', { ascending: false });
 
       if (error) throw error;
@@ -243,7 +260,18 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     }
 
     try {
-      const dbFeature = this.mapRatedFeatureToDb(feature);
+      // Get the trip to retrieve user_id
+      const { data: tripData, error: tripError } = await supabase
+        .from('trips')
+        .select('user_id')
+        .eq('id', feature.tripId)
+        .single();
+
+      if (tripError || !tripData) {
+        throw new Error(`Trip not found for rated feature: ${feature.tripId}`);
+      }
+
+      const dbFeature = this.mapRatedFeatureToDb(feature, tripData.user_id);
       const { error } = await supabase
         .from('rated_features')
         .upsert(dbFeature);
@@ -353,6 +381,7 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       status: data.status,
       created_at: data.created_at,
       updated_at: data.updated_at,
+      synced_at: data.synced_at || null,
     };
   }
 
@@ -371,6 +400,7 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       status: trip.status,
       created_at: trip.created_at,
       updated_at: trip.updated_at,
+      synced_at: null,
     };
   }
 
@@ -388,10 +418,11 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     };
   }
 
-  private mapRatedFeatureToDb(feature: RatedFeature): any {
+  private mapRatedFeatureToDb(feature: RatedFeature, userId: string): any {
     return {
       feature_id: feature.id,
       trip_id: feature.tripId,
+      user_id: userId,
       user_rating: feature.userRating,
       latitude: feature.geometry.coordinates[1],
       longitude: feature.geometry.coordinates[0],

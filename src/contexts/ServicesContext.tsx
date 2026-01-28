@@ -29,12 +29,12 @@ export const ServicesProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       await syncService.initialize();
 
       // Initialize storage adapter with sync
-      const storageAdapter = new HybridStorageAdapter(syncService);
+      const storageAdapter = new HybridStorageAdapter(syncService) as StorageAdapter;
 
       // Initialize all services with the same storage adapter
       const tripService = new TripService(storageAdapter);
       const profileService = new ProfileService(storageAdapter);
-      const ratingService = new RatingService(storageAdapter);
+      const ratingService = new RatingService(storageAdapter as any);
       const statisticsService = new StatisticsService(storageAdapter);
 
       setServices({

@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { NavigationProp, RouteProp, useFocusEffect } from '@react-navigation/native';
 import { useServices } from '../contexts/ServicesContext';
+import { useTour } from '../contexts/TourContext';
+import { TourOverlay } from '../components/TourOverlay';
 import { processRatings, ProcessedRatedFeature, calculateMapRegion } from '../utils/homeScreenUtils';
 import { MapViewMapbox } from '../components/MapViewMapbox';
 import { ObstacleFeature } from '../types';
@@ -21,6 +23,7 @@ interface HomeScreenProps {
  */
 export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation, route }) => {
   const { ratingService } = useServices();
+  const { state: tourState, nextStep, previousStep, dismissTour, completeTour } = useTour();
   
   // State management
   const [ratedFeatures, setRatedFeatures] = useState<ProcessedRatedFeature[]>([]);
@@ -93,23 +96,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation, route }) => 
     }));
   }, [ratedFeatures]);
 
-  // Convert rated features to route points for initial map bounds fitting
-  // Requirement: 2.5
+  // Empty route points - HomeScreen should not show any paths
   const routePointsForBounds = useMemo(() => {
-    if (ratedFeatures.length === 0) {
-      // Return default location as a single point
-      return [{
-        latitude: DEFAULT_REGION.latitude,
-        longitude: DEFAULT_REGION.longitude,
-        accuracy: 0,
-      }];
+    return [];
+  }, []);
+
+  // Fit map to rated features when they change
+  useEffect(() => {
+    if (mapReady && ratedFeatures.length > 0) {
+      // The map will automatically fit to the obstacle features
+      console.log('Map ready with', ratedFeatures.length, 'rated features');
     }
-    return ratedFeatures.map(feature => ({
-      latitude: feature.latitude,
-      longitude: feature.longitude,
-      accuracy: 0,
-    }));
-  }, [ratedFeatures]);
+  }, [mapReady, ratedFeatures]);
 
   // Extract rated feature IDs and ratings for MapViewMapbox
   // Requirement: 3.1, 3.2, 3.4
@@ -152,7 +150,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation, route }) => 
       <MapViewMapbox
         currentLocation={null}
         routePoints={routePointsForBounds}
-        showCompleteRoute={true}
+        showCompleteRoute={false}
         obstacleFeatures={obstacleFeatures}
         ratedFeatureIds={ratedFeatureIds}
         ratedFeatureRatings={ratedFeatureRatings}
@@ -193,6 +191,26 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation, route }) => 
             Start a trip and rate accessibility features to see them here
           </Text>
         </View>
+      )}
+      
+      {/* Tour Overlay - Onboarding Tutorial */}
+      {tourState.isActive && tourState.currentStep === 0 && (
+        <TourOverlay
+          step={{
+            id: 'home_profile_nav',
+            screen: 'Home',
+            title: 'Welcome to Your App!',
+            description: "Let's start by exploring your profile. Tap the profile icon to customize your settings.",
+            highlightElement: 'profile_nav_button',
+            position: 'bottom',
+          }}
+          currentStep={tourState.currentStep}
+          totalSteps={tourState.totalSteps}
+          onNext={nextStep}
+          onPrevious={previousStep}
+          onDismiss={dismissTour}
+          onComplete={completeTour}
+        />
       )}
     </View>
   );
