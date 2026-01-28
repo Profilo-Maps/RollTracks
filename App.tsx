@@ -18,6 +18,7 @@ import { AuthProvider } from './src/contexts/AuthContext';
 import { ModeProvider } from './src/contexts/ModeContext';
 import { ToastProvider } from './src/contexts/ToastContext';
 import { ServicesProvider } from './src/contexts/ServicesContext';
+import { TourProvider } from './src/contexts/TourContext';
 import { 
   LoginScreen,
   RegisterScreen,
@@ -54,15 +55,17 @@ const Stack = createStackNavigator();
 
 // Profile button component for header
 const ProfileButton = ({ navigation }: any) => (
-  <TouchableOpacity
-    onPress={() => navigation.navigate('Profile')}
-    style={styles.profileButton}
-    accessibilityLabel="Open profile"
-    accessibilityRole="button"
-    accessibilityHint="Tap to view and edit your profile"
-  >
-    <Text style={styles.profileButtonText}>👤</Text>
-  </TouchableOpacity>
+  <View nativeID="profile_nav_button">
+    <TouchableOpacity
+      onPress={() => navigation.navigate('Profile')}
+      style={styles.profileButton}
+      accessibilityLabel="Open profile"
+      accessibilityRole="button"
+      accessibilityHint="Tap to view and edit your profile"
+    >
+      <Text style={styles.profileButtonText}>👤</Text>
+    </TouchableOpacity>
+  </View>
 );
 
 // Custom tab bar component
@@ -200,7 +203,7 @@ function MainTabs({ syncService }: { syncService: SyncService | null }) {
       />
       <Tab.Screen 
         name="History" 
-        component={TripHistoryScreen}
+        component={TripHistoryScreen as any}
         options={{
           tabBarLabel: 'History',
           tabBarIcon: ({ color }) => <Text style={{ fontSize: 18, color }}>📋</Text>,
@@ -242,8 +245,11 @@ function RootNavigator({ syncService }: { syncService: SyncService | null }) {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.loadingText}>Loading...</Text>
+        <View style={styles.loadingContent}>
+          <Text style={styles.appName}>RollTracks</Text>
+          <ActivityIndicator size="large" color="#007AFF" style={styles.spinner} />
+          <Text style={styles.loadingText}>Loading your data...</Text>
+        </View>
       </View>
     );
   }
@@ -359,8 +365,11 @@ function App() {
     return (
       <SafeAreaProvider>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.loadingText}>Loading...</Text>
+          <View style={styles.loadingContent}>
+            <Text style={styles.appName}>RollTracks</Text>
+            <ActivityIndicator size="large" color="#007AFF" style={styles.spinner} />
+            <Text style={styles.loadingText}>Initializing...</Text>
+          </View>
         </View>
       </SafeAreaProvider>
     );
@@ -374,7 +383,9 @@ function App() {
             <ToastProvider>
               <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
               <NavigationContainer ref={navigationRef}>
-                <RootNavigator syncService={syncService.current} />
+                <TourProvider navigationRef={navigationRef}>
+                  <RootNavigator syncService={syncService.current} />
+                </TourProvider>
               </NavigationContainer>
             </ToastProvider>
           </ModeProvider>
@@ -389,12 +400,25 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#ffffff',
+  },
+  loadingContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  appName: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    color: '#007AFF',
+    marginBottom: 32,
+  },
+  spinner: {
+    marginVertical: 16,
   },
   loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#666',
+    marginTop: 8,
+    fontSize: 14,
+    color: '#8E8E93',
   },
   profileButton: {
     marginRight: 16,

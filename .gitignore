@@ -35,6 +35,14 @@ local.properties
 !debug.keystore
 .kotlin/
 
+# Android signing credentials - NEVER COMMIT THESE
+keystore.properties
+android/keystore.properties
+android/app/keystore.properties
+android/gradle.properties
+android\app\my-upload-key.keystore
+android\app\debug.keystore
+
 # node.js
 #
 node_modules/
@@ -87,3 +95,6 @@ android/app/src/main/assets/sf_tiles/
 
 # Supabase config with credentials
 src/config/supabase.config.ts
+
+# Kiro specs
+.kiro/specs/

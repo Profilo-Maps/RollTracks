@@ -63,7 +63,18 @@ export class LocalStorageAdapter implements StorageAdapter {
       if (!tripsJson) {
         return [];
       }
-      return JSON.parse(tripsJson) as Trip[];
+      
+      const allTrips = JSON.parse(tripsJson) as Trip[];
+      
+      // Get current user to filter trips
+      const userJson = await AsyncStorage.getItem('@rolltracks:user');
+      if (!userJson) {
+        return [];
+      }
+      const user = JSON.parse(userJson);
+      
+      // Filter trips by current user
+      return allTrips.filter(trip => trip.user_id === user.id);
     } catch (error) {
       console.error('Error getting trips from local storage:', error);
       throw error;
@@ -194,13 +205,47 @@ export class LocalStorageAdapter implements StorageAdapter {
   }
 
   // Rated features operations
-  async getRatedFeatures(): Promise<RatedFeature[]> {
+  
+  /**
+   * Get all rated features from storage (unfiltered)
+   * Private helper method to avoid filtering issues in save operations
+   */
+  private async getAllRatedFeaturesUnfiltered(): Promise<RatedFeature[]> {
     try {
       const featuresJson = await AsyncStorage.getItem(STORAGE_KEYS.RATED_FEATURES);
       if (!featuresJson) {
         return [];
       }
       return JSON.parse(featuresJson) as RatedFeature[];
+    } catch (error) {
+      console.error('Error getting all rated features from local storage:', error);
+      return [];
+    }
+  }
+  
+  async getRatedFeatures(): Promise<RatedFeature[]> {
+    try {
+      const allFeatures = await this.getAllRatedFeaturesUnfiltered();
+      
+      // Get current user to filter features
+      const userJson = await AsyncStorage.getItem('@rolltracks:user');
+      if (!userJson) {
+        return [];
+      }
+      const user = JSON.parse(userJson);
+      
+      // Get user's trips to filter features
+      const tripsJson = await AsyncStorage.getItem(STORAGE_KEYS.TRIPS);
+      if (!tripsJson) {
+        return [];
+      }
+      const allTrips = JSON.parse(tripsJson) as Trip[];
+      const userTripIds = allTrips
+        .filter(trip => trip.user_id === user.id)
+        .map(trip => trip.id);
+      
+      // Filter features by user's trips
+      return allFeatures.filter(feature => userTripIds.includes(feature.tripId));
     } catch (error) {
       console.error('Error getting rated features from local storage:', error);
       // Return empty array on parsing errors to prevent app crashes
@@ -210,22 +255,23 @@ export class LocalStorageAdapter implements StorageAdapter {
 
   async saveRatedFeature(feature: RatedFeature): Promise<void> {
     try {
-      const features = await this.getRatedFeatures();
+      // Get ALL features (unfiltered) to avoid losing other users' data
+      const allFeatures = await this.getAllRatedFeaturesUnfiltered();
       
       // Check if feature already exists for this trip
-      const existingIndex = features.findIndex(
+      const existingIndex = allFeatures.findIndex(
         f => f.id === feature.id && f.tripId === feature.tripId
       );
       
       if (existingIndex >= 0) {
         // Update existing feature
-        features[existingIndex] = feature;
+        allFeatures[existingIndex] = feature;
       } else {
         // Add new feature
-        features.push(feature);
+        allFeatures.push(feature);
       }
 
-      const featuresJson = JSON.stringify(features);
+      const featuresJson = JSON.stringify(allFeatures);
       await AsyncStorage.setItem(STORAGE_KEYS.RATED_FEATURES, featuresJson);
     } catch (error) {
       console.error('Error saving rated feature to local storage:', error);
@@ -249,8 +295,9 @@ export class LocalStorageAdapter implements StorageAdapter {
     updates: Partial<RatedFeature>
   ): Promise<void> {
     try {
-      const features = await this.getRatedFeatures();
-      const featureIndex = features.findIndex(
+      // Get ALL features (unfiltered) to avoid losing other users' data
+      const allFeatures = await this.getAllRatedFeaturesUnfiltered();
+      const featureIndex = allFeatures.findIndex(
         f => f.id === featureId && f.tripId === tripId
       );
 
@@ -260,16 +307,16 @@ export class LocalStorageAdapter implements StorageAdapter {
 
       // Update feature while preserving timestamp
       const updatedFeature: RatedFeature = {
-        ...features[featureIndex],
+        ...allFeatures[featureIndex],
         ...updates,
-        id: features[featureIndex].id, // Ensure id doesn't change
-        tripId: features[featureIndex].tripId, // Ensure tripId doesn't change
-        timestamp: features[featureIndex].timestamp, // Preserve original timestamp
+        id: allFeatures[featureIndex].id, // Ensure id doesn't change
+        tripId: allFeatures[featureIndex].tripId, // Ensure tripId doesn't change
+        timestamp: allFeatures[featureIndex].timestamp, // Preserve original timestamp
       };
 
-      features[featureIndex] = updatedFeature;
+      allFeatures[featureIndex] = updatedFeature;
 
-      const featuresJson = JSON.stringify(features);
+      const featuresJson = JSON.stringify(allFeatures);
       await AsyncStorage.setItem(STORAGE_KEYS.RATED_FEATURES, featuresJson);
     } catch (error) {
       console.error('Error updating rated feature in local storage:', error);

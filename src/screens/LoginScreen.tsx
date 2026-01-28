@@ -175,9 +175,11 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 16,
     marginBottom: 16,
+    color: '#000',
   },
   passwordInput: {
     fontFamily: Platform.OS === 'android' ? 'normal' : undefined,
+    color: '#000',
   },
   button: {
     backgroundColor: '#007AFF',

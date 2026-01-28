@@ -11,6 +11,7 @@ interface TripCardProps {
   onTripEnded?: () => void;
   onTripDeleted?: () => void;
   isHighlighted?: boolean;
+  ratedFeaturesCount?: number;
 }
 
 const MODE_LABELS: Record<Mode, string> = {
@@ -26,12 +27,16 @@ const MODE_LABELS: Record<Mode, string> = {
  * Shows start_time, end_time, duration, and route_info formatted for readability
  * Supports visual highlighting when navigated from HomeScreen
  */
-export const TripCard: React.FC<TripCardProps> = ({ trip, onTripEnded, onTripDeleted, isHighlighted = false }) => {
+export const TripCard: React.FC<TripCardProps> = ({ trip, onTripEnded, onTripDeleted, isHighlighted = false, ratedFeaturesCount = 0 }) => {
   const navigation = useNavigation();
   const { tripService } = useServices();
   const { showSuccess, showError } = useToast();
   const [isEnding, setIsEnding] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  
+  // Check if trip can be graded
+  const canGrade = canGradeTrip(trip);
+  const remainingTime = getRemainingGradingTime(trip);
   
   const handlePress = () => {
     // If trip is active or paused, navigate to ActiveTripScreen
@@ -129,14 +134,10 @@ export const TripCard: React.FC<TripCardProps> = ({ trip, onTripEnded, onTripDel
     }
   };
 
-  const modeLabel = MODE_LABELS[trip.mode] || trip.mode;
+  const modeLabel = MODE_LABELS[trip.mode as Mode] || trip.mode;
   const distanceText = trip.distance_miles !== null 
     ? `${trip.distance_miles.toFixed(2)} miles` 
     : 'N/A';
-
-  // Check grading availability
-  const canGrade = canGradeTrip(trip);
-  const remainingTime = getRemainingGradingTime(trip);
 
   const tripSummary = `Trip ${trip.status === 'completed' ? 'completed' : trip.status}. Mode: ${modeLabel}. Boldness: ${trip.boldness}. Distance: ${distanceText}. Started ${formatDateTime(trip.start_time)}. ${trip.end_time ? `Ended ${formatDateTime(trip.end_time)}.` : 'Still in progress.'} Duration: ${formatDuration(trip.duration_seconds)}.${canGrade ? ' Grading available.' : ''}`;
 
@@ -185,89 +186,98 @@ export const TripCard: React.FC<TripCardProps> = ({ trip, onTripEnded, onTripDel
         <Text style={styles.label}>Boldness:</Text>
         <Text style={styles.value}>{trip.boldness}/10</Text>
       </View>
-      
-      <View style={styles.row}>
-        <Text style={styles.label}>Start:</Text>
-        <Text style={styles.value}>{formatDateTime(trip.start_time)}</Text>
-      </View>
-      
-      <View style={styles.row}>
-        <Text style={styles.label}>End:</Text>
-        <Text style={styles.value}>
-          {trip.end_time ? formatDateTime(trip.end_time) : 'In Progress'}
-        </Text>
-      </View>
-
-      <View style={styles.row}>
-        <Text style={styles.label}>Duration:</Text>
-        <Text style={styles.value}>{formatDuration(trip.duration_seconds)}</Text>
-      </View>
-      
-      {trip.purpose && (
+        
         <View style={styles.row}>
-          <Text style={styles.label}>Purpose:</Text>
+          <Text style={styles.label}>Start:</Text>
+          <Text style={styles.value}>{formatDateTime(trip.start_time)}</Text>
+        </View>
+        
+        <View style={styles.row}>
+          <Text style={styles.label}>End:</Text>
           <Text style={styles.value}>
-            {trip.purpose.charAt(0).toUpperCase() + trip.purpose.slice(1)}
+            {trip.end_time ? formatDateTime(trip.end_time) : 'In Progress'}
           </Text>
         </View>
-      )}
 
-      {canGrade && (
         <View style={styles.row}>
-          <Text style={styles.label}>Grading:</Text>
-          <Text style={[styles.value, styles.gradingText]}>
-            {formatRemainingTime(remainingTime)}
-          </Text>
+          <Text style={styles.label}>Duration:</Text>
+          <Text style={styles.value}>{formatDuration(trip.duration_seconds)}</Text>
         </View>
-      )}
+        
+        {trip.purpose && (
+          <View style={styles.row}>
+            <Text style={styles.label}>Purpose:</Text>
+            <Text style={styles.value}>
+              {trip.purpose.charAt(0).toUpperCase() + trip.purpose.slice(1)}
+            </Text>
+          </View>
+        )}
 
-      {isActive && (
-        <View style={styles.actionButtons}>
+        {ratedFeaturesCount > 0 && (
+          <View style={styles.row}>
+            <Text style={styles.label}>Features:</Text>
+            <Text style={styles.value}>
+              {ratedFeaturesCount} rated
+            </Text>
+          </View>
+        )}
+
+        {canGrade && (
+          <View style={styles.row}>
+            <Text style={styles.label}>Grading:</Text>
+            <Text style={[styles.value, styles.gradingText]}>
+              {formatRemainingTime(remainingTime)}
+            </Text>
+          </View>
+        )}
+
+        {isActive && (
+          <View style={styles.actionButtons}>
+            <TouchableOpacity
+              style={[styles.actionButton, styles.resumeButton]}
+              onPress={handleResume}
+              accessibilityRole="button"
+              accessibilityLabel="Resume trip"
+              accessibilityHint="Navigate to active trip screen to continue recording"
+              disabled={isEnding || isDeleting}
+            >
+              <Text style={styles.resumeButtonText}>▶️ Resume</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.actionButton, styles.endButton]}
+              onPress={handleEndTrip}
+              accessibilityRole="button"
+              accessibilityLabel="End trip"
+              accessibilityHint="Stop recording and complete this trip"
+              disabled={isEnding || isDeleting}
+            >
+              {isEnding ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.endButtonText}>⏹️ End Trip</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
+
+        <View style={styles.deleteButtonContainer}>
           <TouchableOpacity
-            style={[styles.actionButton, styles.resumeButton]}
-            onPress={handleResume}
+            style={[styles.deleteButton, isDeleting && styles.deleteButtonDisabled]}
+            onPress={handleDeleteTrip}
             accessibilityRole="button"
-            accessibilityLabel="Resume trip"
-            accessibilityHint="Navigate to active trip screen to continue recording"
-            disabled={isEnding || isDeleting}
+            accessibilityLabel="Delete trip"
+            accessibilityHint="Permanently delete this trip"
+            disabled={isDeleting || isEnding}
           >
-            <Text style={styles.resumeButtonText}>▶️ Resume</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={[styles.actionButton, styles.endButton]}
-            onPress={handleEndTrip}
-            accessibilityRole="button"
-            accessibilityLabel="End trip"
-            accessibilityHint="Stop recording and complete this trip"
-            disabled={isEnding || isDeleting}
-          >
-            {isEnding ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
+            {isDeleting ? (
+              <ActivityIndicator size="small" color="#FF3B30" />
             ) : (
-              <Text style={styles.endButtonText}>⏹️ End Trip</Text>
+              <Text style={styles.deleteButtonText}>🗑️ Delete Trip</Text>
             )}
           </TouchableOpacity>
         </View>
-      )}
-
-      <View style={styles.deleteButtonContainer}>
-        <TouchableOpacity
-          style={[styles.deleteButton, isDeleting && styles.deleteButtonDisabled]}
-          onPress={handleDeleteTrip}
-          accessibilityRole="button"
-          accessibilityLabel="Delete trip"
-          accessibilityHint="Permanently delete this trip"
-          disabled={isDeleting || isEnding}
-        >
-          {isDeleting ? (
-            <ActivityIndicator size="small" color="#FF3B30" />
-          ) : (
-            <Text style={styles.deleteButtonText}>🗑️ Delete Trip</Text>
-          )}
-        </TouchableOpacity>
-      </View>
-    </CardWrapper>
+      </CardWrapper>
   );
 };
 

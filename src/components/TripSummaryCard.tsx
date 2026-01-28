@@ -87,7 +87,7 @@ export const TripSummaryCard: React.FC<TripSummaryCardProps> = ({
         <View style={styles.content}>
           <View style={styles.infoRow}>
             <Text style={styles.label}>Mode:</Text>
-            <Text style={styles.value}>{MODE_LABELS[trip.mode]}</Text>
+            <Text style={styles.value}>{MODE_LABELS[trip.mode as Mode]}</Text>
           </View>
 
           <View style={styles.infoRow}>

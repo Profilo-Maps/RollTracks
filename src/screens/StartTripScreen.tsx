@@ -14,6 +14,8 @@ import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useServices } from '../contexts/ServicesContext';
+import { useTour } from '../contexts/TourContext';
+import { TourOverlay } from '../components/TourOverlay';
 import { GPSService } from '../services/GPSService';
 
 import { ModeSelector } from '../components/ModeSelector';
@@ -26,6 +28,7 @@ export const StartTripScreen: React.FC = () => {
   const navigation = useNavigation();
   const { user, signOut } = useAuth();
   const { showError, showSuccess } = useToast();
+  const { state: tourState, nextStep, previousStep, dismissTour, completeTour } = useTour();
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [availableModes, setAvailableModes] = useState<Mode[]>([]);
@@ -197,32 +200,74 @@ export const StartTripScreen: React.FC = () => {
           />
         </View>
         
-        <TouchableOpacity
-          style={[
-            styles.button,
-            isStartEnabled ? styles.buttonEnabled : styles.buttonDisabled,
-            starting && styles.buttonLoading,
-          ]}
-          onPress={handleStartTrip}
-          disabled={!isStartEnabled || starting}
-          accessibilityLabel="Start trip"
-          accessibilityRole="button"
-          accessibilityHint={
-            !isStartEnabled
-              ? 'Select mode, boldness, and purpose to enable'
-              : starting
-              ? 'Starting trip'
-              : 'Tap to start your trip'
-          }
-          accessibilityState={{ disabled: !isStartEnabled || starting }}
-        >
-          {starting ? (
-            <ActivityIndicator color="#FFFFFF" accessibilityLabel="Starting" />
-          ) : (
-            <Text style={styles.buttonText}>Start Trip</Text>
-          )}
-        </TouchableOpacity>
+        <View nativeID="start_trip_button">
+          <TouchableOpacity
+            style={[
+              styles.button,
+              isStartEnabled ? styles.buttonEnabled : styles.buttonDisabled,
+              starting && styles.buttonLoading,
+            ]}
+            onPress={handleStartTrip}
+            disabled={!isStartEnabled || starting}
+            accessibilityLabel="Start trip"
+            accessibilityRole="button"
+            accessibilityHint={
+              !isStartEnabled
+                ? 'Select mode, boldness, and purpose to enable'
+                : starting
+                ? 'Starting trip'
+                : 'Tap to start your trip'
+            }
+            accessibilityState={{ disabled: !isStartEnabled || starting }}
+          >
+            {starting ? (
+              <ActivityIndicator color="#FFFFFF" accessibilityLabel="Starting" />
+            ) : (
+              <Text style={styles.buttonText}>Start Trip</Text>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
+      
+      {/* Tour Overlay - Onboarding Tutorial */}
+      {tourState.isActive && tourState.currentStep === 2 && (
+        <TourOverlay
+          step={{
+            id: 'start_trip',
+            screen: 'StartTrip',
+            title: 'Record Your Trips',
+            description: "Look for the red Record button (●) at the bottom of the screen. Tap it to start recording your trip and tracking accessibility features.",
+            highlightElement: 'start_trip_button',
+            position: 'bottom',
+          }}
+          currentStep={tourState.currentStep}
+          totalSteps={tourState.totalSteps}
+          onNext={nextStep}
+          onPrevious={previousStep}
+          onDismiss={dismissTour}
+          onComplete={completeTour}
+        />
+      )}
+      
+      {/* Tour Overlay - Step 4: Active Trip Info */}
+      {tourState.isActive && tourState.currentStep === 3 && (
+        <TourOverlay
+          step={{
+            id: 'active_trip_info',
+            screen: 'StartTrip',
+            title: 'Rating Features',
+            description: "When a trip is active, dots representing street features will pop up on the map. Click on the dots to rate them and help improve accessibility data!",
+            highlightElement: 'start_trip_button',
+            position: 'bottom',
+          }}
+          currentStep={tourState.currentStep}
+          totalSteps={tourState.totalSteps}
+          onNext={nextStep}
+          onPrevious={previousStep}
+          onDismiss={dismissTour}
+          onComplete={completeTour}
+        />
+      )}
     </ScrollView>
   );
 };

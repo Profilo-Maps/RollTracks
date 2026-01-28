@@ -149,7 +149,7 @@ export class FileService {
 
     // Check file size
     const stat = await RNFS.stat(file.localUri);
-    if (parseInt(stat.size) > this.maxFileSize) {
+    if (parseInt(stat.size.toString()) > this.maxFileSize) {
       return {
         valid: false,
         error: `File size exceeds maximum of ${this.maxFileSize / 1024 / 1024}MB`,
@@ -173,11 +173,23 @@ export class FileService {
    * @returns ArrayBuffer
    */
   private base64ToArrayBuffer(base64: string): ArrayBuffer {
-    const binaryString = atob(base64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
+    // For React Native, decode base64 to binary string
+    const binaryString = base64.replace(/[^A-Za-z0-9+/=]/g, '');
+    const len = binaryString.length;
+    const bytes = new Uint8Array(Math.ceil(len * 3 / 4));
+    
+    let p = 0;
+    for (let i = 0; i < len; i += 4) {
+      const encoded1 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='.indexOf(binaryString[i]);
+      const encoded2 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='.indexOf(binaryString[i + 1]);
+      const encoded3 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='.indexOf(binaryString[i + 2]);
+      const encoded4 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='.indexOf(binaryString[i + 3]);
+      
+      bytes[p++] = (encoded1 << 2) | (encoded2 >> 4);
+      if (encoded3 !== 64) bytes[p++] = ((encoded2 & 15) << 4) | (encoded3 >> 2);
+      if (encoded4 !== 64) bytes[p++] = ((encoded3 & 3) << 6) | encoded4;
     }
+    
     return bytes.buffer;
   }
 }
