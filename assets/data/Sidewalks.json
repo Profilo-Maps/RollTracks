@@ -1,0 +1,14 @@
+{
+  "_comment": "Tile2Net/CitySurfaces Data - Sidewalk segments for DataRanger mode",
+  "_schema": {
+    "Segment_ID": "string",
+    "To_St": "string",
+    "From_St": "string",
+    "Side_of_Road": "string",
+    "Material": "string",
+    "Needs_Correction": "boolean",
+    "Number_of_Corrections": "number",
+    "Geometry": "GeoJSON LineString"
+  },
+  "features": []
+}

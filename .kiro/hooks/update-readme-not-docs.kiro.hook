@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Update README Instead of Docs",
+  "description": "When implementing new features, update the central README.md file instead of creating separate documentation files. Always ask before creating new documentation files.",
+  "version": "1",
+  "when": {
+    "type": "promptSubmit"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "When implementing new features, update the central README.md file with relevant information instead of creating separate documentation files. Do not create new .md files for documentation without explicitly asking the user first."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Consult Architecture on Feature Requests",
+  "description": "When implementing a new feature, automatically consult the RollTracks Architecture.md file to understand how the requested module connects to the rest of the project",
+  "version": "1",
+  "when": {
+    "type": "promptSubmit"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Before implementing this feature request, review the relevant sections of prompts/RollTracks Architecture.md to understand how the requested module connects to the rest of the project architecture. Use this context to ensure your implementation aligns with the existing system design."
+  }
+}
