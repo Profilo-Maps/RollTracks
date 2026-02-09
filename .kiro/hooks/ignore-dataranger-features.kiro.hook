@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Ignore DataRanger Features",
+  "description": "Reminds the agent to exclude all DataRanger-related features (segment corrections, obstacle ratings) when implementing new functionality",
+  "version": "1",
+  "when": {
+    "type": "promptSubmit"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "IMPORTANT: When implementing features, ignore and exclude all DataRanger-related functionality including:\n- Segment corrections (sidewalk network improvements)\n- Obstacle ratings and feature assessments\n- Curb ramp validation\n- Any DataRanger mode UI or logic\n\nFocus only on core trip recording, history, and basic routing features."
+  }
+}

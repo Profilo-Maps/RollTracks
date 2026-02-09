@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { AuthService, UserProfile } from '@/adapters/SupabaseAdapter';
+import { AuthService, UserProfile } from '@/adapters/DatabaseAdapter';
+import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
 
 /**
  * Auth Context
@@ -13,12 +13,13 @@ interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  signIn: (username: string, pin: string) => Promise<void>;
-  signUp: (userData: Omit<User, 'id'> & { password: string }) => Promise<void>;
+  signIn: (displayName: string, password: string, captchaToken?: string) => Promise<void>;
+  signUp: (userData: Omit<User, 'id' | 'dataRangerMode'> & { password: string; captchaToken?: string }) => Promise<void>;
   signOut: () => Promise<void>;
   deleteUserData: () => Promise<void>;
   updateUser: (updates: Partial<User>) => Promise<void>;
   toggleDataRangerMode: () => Promise<void>;
+  checkDisplayNameAvailability: (displayName: string) => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -34,10 +35,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
   useEffect(() => {
     const checkSession = async () => {
       try {
-        const profile = await AuthService.getCurrentUser();
+        // Add timeout to prevent infinite loading (30 seconds)
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Session check timeout')), 30000)
+        );
+        
+        const profile = await Promise.race([
+          AuthService.getCurrentUser(),
+          timeoutPromise
+        ]) as UserProfile | null;
+        
         if (profile) setUser(profile);
       } catch (error) {
         console.error('Session check failed:', error);
+        // Continue to app even if session check fails
       } finally {
         setIsLoading(false);
       }
@@ -46,10 +57,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
     checkSession();
   }, []);
 
-  const signIn = async (username: string, pin: string) => {
+  const signIn = async (displayName: string, password: string, captchaToken?: string) => {
     setIsLoading(true);
     try {
-      const profile = await AuthService.login(username, pin);
+      // Use displayName as username for login
+      const profile = await AuthService.login(displayName, password, captchaToken);
       setUser(profile);
     } catch (error) {
       console.error('Sign in failed:', error);
@@ -59,15 +71,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   };
 
-  const signUp = async (userData: Omit<User, 'id'> & { password: string }) => {
+  const signUp = async (userData: Omit<User, 'id' | 'dataRangerMode'> & { password: string; captchaToken?: string }) => {
     setIsLoading(true);
     try {
       const profile = await AuthService.register({
-        username: userData.displayName,
+        username: userData.displayName, // Use displayName as username
         displayName: userData.displayName,
         age: userData.age,
-        pin: userData.password,
+        password: userData.password,
         modeList: userData.modeList,
+        captchaToken: userData.captchaToken,
       });
       setUser(profile);
     } catch (error) {
@@ -79,15 +92,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   const signOut = async () => {
-    setIsLoading(true);
+    // Logout just clears local state - session persists in AsyncStorage
+    // This allows the user to log back in on the same device without
+    // creating a new profile or migrating data
     try {
       await AuthService.logout();
       setUser(null);
     } catch (error) {
       console.error('Sign out failed:', error);
-      throw error;
-    } finally {
-      setIsLoading(false);
+      // Even if logout fails, clear local state
+      setUser(null);
     }
   };
 
@@ -126,6 +140,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   };
 
+  const checkDisplayNameAvailability = async (displayName: string): Promise<boolean> => {
+    try {
+      return await AuthService.checkDisplayNameAvailability(displayName);
+    } catch (error) {
+      console.error('Check display name availability failed:', error);
+      throw error;
+    }
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -138,6 +161,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         deleteUserData,
         updateUser,
         toggleDataRangerMode,
+        checkDisplayNameAvailability,
       }}
     >
       {children}

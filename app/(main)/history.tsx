@@ -1,53 +1,95 @@
+import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import React from 'react';
-import { StyleSheet, View, ScrollView } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { useThemeColor } from '@/hooks/use-theme-color';
+import { BasemapLayout } from '@/layouts/BasemapLayout';
 
 /**
  * Trip History Screen
  * Built with Basemap Layout.
  *
  * Features:
- * - List of Trip Summary Cards in body slot
+ * - List of Trip Summary Cards in body slot (TODO)
  * - Profile button in right of header slot (launches Profile Screen)
  * - Map View Component is frozen and dimmed
- *
- * TODO:
- * - Integrate with History Service to fetch all user trips
- * - Implement Trip History Card Component for each trip
- * - Add dimmed/frozen state to MapViewComponent
- * - Add profile button to header
  */
 export default function TripHistoryScreen() {
-  return (
-    <View style={styles.container}>
+  const iconColor = useThemeColor({}, 'icon');
+  const backgroundColor = useThemeColor({}, 'background');
+
+  // Navigate to profile screen
+  const handleProfilePress = () => {
+    router.push('/(auth)/profile');
+  };
+
+  // Render header with title and profile button
+  const renderHeader = () => (
+    <View style={styles.headerContainer}>
+      <ThemedText type="title" style={styles.headerTitle}>Trip History</ThemedText>
+      <Pressable 
+        style={styles.profileButton}
+        onPress={handleProfilePress}
+        accessibilityLabel="Open profile"
+        accessibilityRole="button"
+      >
+        <Ionicons name="person-circle-outline" size={32} color={iconColor} />
+      </Pressable>
+    </View>
+  );
+
+  // Render body with placeholder for trip cards
+  const renderBody = () => (
+    <View style={styles.bodyContainer}>
       {/* Semi-opaque background to dim the map */}
       <View style={styles.dimmedOverlay} />
 
-      <ScrollView style={styles.scrollContainer}>
-        <ThemedView style={styles.header}>
-          <ThemedText type="title">Trip History</ThemedText>
-          {/* TODO: Add profile button */}
-        </ThemedView>
-
-        {/* TODO: Replace with Trip History Card Components from History Service */}
-        <ThemedView style={styles.tripCard}>
-          <ThemedText type="defaultSemiBold">Sample Trip</ThemedText>
-          <ThemedText>Duration: 15 min | Distance: 0.8 mi</ThemedText>
-        </ThemedView>
-
-        <ThemedView style={styles.tripCard}>
-          <ThemedText type="defaultSemiBold">Sample Trip 2</ThemedText>
-          <ThemedText>Duration: 22 min | Distance: 1.2 mi</ThemedText>
-        </ThemedView>
+      <ScrollView 
+        style={styles.scrollContainer}
+        contentContainerStyle={styles.scrollContent}
+      >
+        <View style={styles.centerContainer}>
+          <ThemedView style={[styles.messageCard, { backgroundColor }]}>
+            <ThemedText type="subtitle">Trip History</ThemedText>
+            <ThemedText style={styles.messageText}>
+              Trip cards will be displayed here.
+            </ThemedText>
+          </ThemedView>
+        </View>
       </ScrollView>
     </View>
+  );
+
+  return (
+    <BasemapLayout
+      interactionState="dimmed"
+      header={renderHeader()}
+      body={renderBody()}
+    />
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  headerContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 60,
+    paddingBottom: 16,
+    backgroundColor: 'transparent',
+  },
+  headerTitle: {
+    flex: 1,
+  },
+  profileButton: {
+    padding: 8,
+    marginLeft: 8,
+  },
+  bodyContainer: {
     flex: 1,
   },
   dimmedOverlay: {
@@ -57,15 +99,25 @@ const styles = StyleSheet.create({
   scrollContainer: {
     flex: 1,
   },
-  header: {
+  scrollContent: {
     padding: 16,
-    paddingTop: 60,
-    backgroundColor: 'transparent',
+    paddingTop: 8,
   },
-  tripCard: {
-    marginHorizontal: 16,
-    marginBottom: 12,
-    padding: 16,
-    borderRadius: 12,
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    minHeight: 300,
+  },
+  messageCard: {
+    padding: 24,
+    borderRadius: 16,
+    alignItems: 'center',
+    maxWidth: 400,
+    opacity: 0.95,
+  },
+  messageText: {
+    marginTop: 12,
+    textAlign: 'center',
   },
 });

@@ -42,7 +42,7 @@ Screens & Components (UI)
 - `SyncService.ts` - Data synchronization buffer
 
 ### `/adapters` - External Service Abstraction
-- `SupabaseAdapter.ts` - Database operations (auth + data)
+- `DatabaseAdapter.ts` - Database operations (auth + data)
 - `MapBoxAdapter.ts` - Map tile fetching
 - `GPSAdapter.ts` - Native GPS data access
 
