@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient, Session, SupabaseClient } from '@supabase/supabase-js';
+import * as Crypto from 'expo-crypto';
+import argon2 from '@sphereon/react-native-argon2';
 
 // ═══════════════════════════════════════════════════════════
 // DATABASE ADAPTER — PUBLIC INTERFACES
@@ -184,29 +186,39 @@ const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
  * Hash a password using Argon2id (recommended for password hashing).
  * Argon2id is the winner of the Password Hashing Competition and provides
  * better security than bcrypt against GPU/ASIC attacks.
- * 
+ *
  * Configuration:
  * - type: argon2id (hybrid mode, resistant to both side-channel and GPU attacks)
  * - memoryCost: 65536 (64 MiB) - balanced for mobile devices
  * - timeCost: 3 iterations - provides good security without impacting UX
  * - parallelism: 4 threads
+ *
+ * Uses @sphereon/react-native-argon2 which provides native implementations:
+ * - Android: argon2kt (official Argon2 C library binding)
+ * - iOS: CatCrypto (Swift wrapper around official Argon2)
  */
 async function _hashPassword(password: string): Promise<string> {
   if (!password || typeof password !== 'string') {
     throw new Error(`Invalid password provided for hashing: ${typeof password}, value: ${password}`);
   }
-  
-  console.log('[_hashPassword] Input:', { password, type: typeof password, length: password.length });
-  
+
+  console.log('[_hashPassword] Input:', { type: typeof password, length: password.length });
+
   try {
-    const hash = await argon2.hash(password, {
-      type: argon2.argon2id,
-      memoryCost: 65536, // 64 MiB
-      timeCost: 3,
+    // Generate a random salt using expo-crypto (cryptographically secure)
+    const saltBytes = await Crypto.getRandomBytesAsync(32); // 32 bytes for hex string
+    const salt = Array.from(saltBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    const result = await argon2(password, salt, {
+      hashLength: 32,
+      memory: 65536, // 64 MiB
       parallelism: 4,
+      mode: 'argon2id',
+      iterations: 3,
     });
-    console.log('[_hashPassword] Success:', { hashLength: hash.length, hashPrefix: hash.substring(0, 10) });
-    return hash;
+
+    console.log('[_hashPassword] Success:', { encodedLength: result.encodedHash.length });
+    return result.encodedHash; // Returns the full encoded hash with salt and parameters
   } catch (error) {
     console.error('[_hashPassword] Error:', error);
     throw new Error(`Password hashing failed: ${error}`);
@@ -215,21 +227,56 @@ async function _hashPassword(password: string): Promise<string> {
 
 /**
  * Compare a plaintext password against an Argon2 hash.
- * Also supports legacy bcrypt hashes for backward compatibility during migration.
+ * Parses the encoded hash to extract salt and parameters, then hashes the input
+ * password with the same parameters and compares the results.
+ * Also checks for legacy bcrypt hashes and rejects them.
  */
 async function _verifyPassword(password: string, hash: string): Promise<boolean> {
   try {
     // Check if it's an Argon2 hash (starts with $argon2)
     if (hash.startsWith('$argon2')) {
-      return await argon2.verify(hash, password);
+      // Parse the encoded hash format: $argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>
+      const parts = hash.split('$');
+      if (parts.length < 6) {
+        console.error('[_verifyPassword] Invalid Argon2 hash format');
+        return false;
+      }
+
+      // Extract parameters from the encoded hash
+      const mode = parts[1] as 'argon2d' | 'argon2i' | 'argon2id';
+      const paramsStr = parts[3]; // "m=65536,t=3,p=4"
+      const saltBase64 = parts[4];
+
+      // Parse parameters
+      const params = paramsStr.split(',').reduce((acc, param) => {
+        const [key, value] = param.split('=');
+        acc[key] = parseInt(value, 10);
+        return acc;
+      }, {} as Record<string, number>);
+
+      // Decode base64 salt to hex string
+      const saltBytes = Uint8Array.from(atob(saltBase64), c => c.charCodeAt(0));
+      const salt = Array.from(saltBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+
+      // Hash the input password with the same parameters
+      const result = await argon2(password, salt, {
+        hashLength: 32, // Standard length
+        memory: params.m,
+        parallelism: params.p,
+        mode: mode,
+        iterations: params.t,
+      });
+
+      // Compare the encoded hashes
+      return result.encodedHash === hash;
     }
-    
+
     // Legacy bcrypt support - if you need to support old hashes during migration
     // Remove this block after all users have migrated
     if (hash.startsWith('$2a$') || hash.startsWith('$2b$') || hash.startsWith('$2y$')) {
       throw new Error('Legacy bcrypt hashes are no longer supported. Please reset your password.');
     }
-    
+
     return false;
   } catch (error) {
     console.error('[_verifyPassword] Error:', error);
