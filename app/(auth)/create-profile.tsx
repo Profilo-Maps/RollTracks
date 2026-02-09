@@ -1,41 +1,88 @@
+import { Link } from 'expo-router';
 import { useState } from 'react';
 import {
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
+    ActivityIndicator,
+    KeyboardAvoidingView,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    TextInput,
+    TouchableOpacity,
 } from 'react-native';
-import { Link } from 'expo-router';
 
-import { ThemedView } from '@/components/themed-view';
-import { ThemedText } from '@/components/themed-text';
 import SelectModeListComponent from '@/components/SelectModeListComponent';
+import { ThemedText } from '@/components/themed-text';
+import { ThemedView } from '@/components/themed-view';
+import TurnstileCaptcha from '@/components/TurnstileCaptcha';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 
 export default function CreateProfileScreen() {
-  const { signUp } = useAuth();
+  const { signUp, checkDisplayNameAvailability } = useAuth();
   const [displayName, setDisplayName] = useState('');
   const [age, setAge] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [modeList, setModeList] = useState<string[]>([]);
+  const [captchaToken, setCaptchaToken] = useState<string>('');
+  const [showCaptcha, setShowCaptcha] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [displayNameStatus, setDisplayNameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
 
   const textColor = useThemeColor({}, 'text');
   const tintColor = useThemeColor({}, 'tint');
   const iconColor = useThemeColor({}, 'icon');
   const errorColor = useThemeColor({}, 'error');
 
+  // Debounced display name availability check
+  const checkDisplayName = async (name: string) => {
+    if (!name.trim() || name.length < 3) {
+      setDisplayNameStatus('idle');
+      return;
+    }
+
+    setDisplayNameStatus('checking');
+    try {
+      const isAvailable = await checkDisplayNameAvailability(name.trim());
+      setDisplayNameStatus(isAvailable ? 'available' : 'taken');
+    } catch (error) {
+      console.error('Failed to check display name:', error);
+      setDisplayNameStatus('idle');
+    }
+  };
+
+  // Debounce the check
+  const handleDisplayNameChange = (text: string) => {
+    setDisplayName(text);
+    setDisplayNameStatus('idle');
+    
+    // Clear any existing timeout
+    if ((handleDisplayNameChange as any).timeout) {
+      clearTimeout((handleDisplayNameChange as any).timeout);
+    }
+    
+    // Set new timeout
+    (handleDisplayNameChange as any).timeout = setTimeout(() => {
+      checkDisplayName(text);
+    }, 500);
+  };
+
   const handleSignUp = async () => {
     setError('');
 
     if (!displayName.trim()) {
       setError('Please enter a display name.');
+      return;
+    }
+
+    if (displayName.trim().length < 3) {
+      setError('Display name must be at least 3 characters.');
+      return;
+    }
+
+    if (displayNameStatus === 'taken') {
+      setError('This display name is already taken. Please choose a different one.');
       return;
     }
 
@@ -63,15 +110,31 @@ export default function CreateProfileScreen() {
       return;
     }
 
+    if (!captchaToken) {
+      setError('Please complete the captcha verification.');
+      return;
+    }
+
     setIsLoading(true);
     try {
+      console.log('About to call signUp with:', {
+        displayName: displayName.trim(),
+        age: ageNum,
+        modeList,
+        passwordType: typeof password,
+        passwordLength: password?.length,
+        captchaToken,
+      });
+      
       await signUp({
         displayName: displayName.trim(),
         age: ageNum,
         modeList,
-        dataRangerMode: false,
         password,
+        captchaToken,
       });
+      
+      // Navigation will happen automatically via AuthContext state change
     } catch (e: any) {
       setError(e.message || 'Registration failed. Please try again.');
     } finally {
@@ -98,20 +161,35 @@ export default function CreateProfileScreen() {
           <ThemedText style={styles.subtitle}>Join the community</ThemedText>
 
           <ThemedView style={styles.formContainer}>
-            <ThemedText style={styles.label}>Username</ThemedText>
+            <ThemedText style={styles.label}>Display Name</ThemedText>
             <ThemedText style={styles.warning}>
-              Please do not use identifying information in your username.
+              Please do not use identifying information in your display name.
             </ThemedText>
             <TextInput
               style={inputStyle}
-              placeholder="Choose a username"
+              placeholder="Choose a display name"
               placeholderTextColor={iconColor}
               value={displayName}
-              onChangeText={setDisplayName}
+              onChangeText={handleDisplayNameChange}
               autoCapitalize="none"
               autoCorrect={false}
               returnKeyType="next"
             />
+            {displayNameStatus === 'checking' && (
+              <ThemedText style={[styles.hint, { color: iconColor }]}>
+                Checking availability...
+              </ThemedText>
+            )}
+            {displayNameStatus === 'available' && (
+              <ThemedText style={[styles.hint, { color: tintColor }]}>
+                ✓ Display name is available
+              </ThemedText>
+            )}
+            {displayNameStatus === 'taken' && (
+              <ThemedText style={[styles.hint, { color: errorColor }]}>
+                ✗ This display name is already taken
+              </ThemedText>
+            )}
 
             <ThemedText style={styles.label}>Age</ThemedText>
             <TextInput
@@ -132,6 +210,7 @@ export default function CreateProfileScreen() {
               value={password}
               onChangeText={setPassword}
               secureTextEntry
+              autoCapitalize="none"
               returnKeyType="next"
             />
 
@@ -143,6 +222,7 @@ export default function CreateProfileScreen() {
               value={confirmPassword}
               onChangeText={setConfirmPassword}
               secureTextEntry
+              autoCapitalize="none"
               returnKeyType="done"
             />
 
@@ -154,6 +234,40 @@ export default function CreateProfileScreen() {
               selected={modeList}
               onChange={setModeList}
             />
+
+            {showCaptcha && (
+              <>
+                <ThemedText style={styles.label}>Verification</ThemedText>
+                <ThemedView style={styles.captchaContainer}>
+                  <TurnstileCaptcha
+                    siteKey={process.env.EXPO_PUBLIC_TURNSTILE_SITE_KEY ?? ''}
+                    appearance="always"
+                    onSuccess={(token: string) => {
+                      setCaptchaToken(token);
+                      setShowCaptcha(false);
+                    }}
+                    onError={() => setError('Captcha verification failed. Please try again.')}
+                    onExpire={() => setCaptchaToken('')}
+                  />
+                </ThemedView>
+              </>
+            )}
+
+            {/* Hidden captcha for invisible mode */}
+            {!showCaptcha && (
+              <ThemedView style={styles.hiddenCaptcha}>
+                <TurnstileCaptcha
+                  siteKey={process.env.EXPO_PUBLIC_TURNSTILE_SITE_KEY ?? ''}
+                  appearance="execute"
+                  onSuccess={(token: string) => setCaptchaToken(token)}
+                  onError={() => {
+                    setShowCaptcha(true);
+                    setError('Please complete the verification challenge.');
+                  }}
+                  onExpire={() => setCaptchaToken('')}
+                />
+              </ThemedView>
+            )}
 
             {error ? (
               <ThemedText style={[styles.error, { color: errorColor }]}>{error}</ThemedText>
@@ -224,6 +338,16 @@ const styles = StyleSheet.create({
     fontSize: 13,
     opacity: 0.6,
     marginBottom: 8,
+  },
+  captchaContainer: {
+    marginVertical: 16,
+    alignItems: 'center',
+    width: '100%',
+  },
+  hiddenCaptcha: {
+    height: 0,
+    width: 0,
+    overflow: 'hidden',
   },
   input: {
     borderWidth: 1,
