@@ -29,6 +29,8 @@ import { TripService } from '@/services/TripService';
 export default function TripHistoryScreen() {
   const backgroundColor = useThemeColor({}, 'background');
   const tintColor = useThemeColor({}, 'tint');
+  const buttonTextColor = useThemeColor({}, 'buttonText');
+  const errorColor = useThemeColor({}, 'error');
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
 
@@ -128,7 +130,7 @@ export default function TripHistoryScreen() {
   const renderError = () => (
     <View style={styles.centerContainer}>
       <ThemedView style={[styles.messageCard, { backgroundColor }]}>
-        <Ionicons name="alert-circle-outline" size={48} color="#FF5252" />
+        <Ionicons name="alert-circle-outline" size={48} color={errorColor} />
         <ThemedText type="subtitle" style={styles.errorTitle}>
           {error}
         </ThemedText>
@@ -150,7 +152,7 @@ export default function TripHistoryScreen() {
             pressed && styles.retryButtonPressed,
           ]}
         >
-          <ThemedText style={styles.retryButtonText}>Retry</ThemedText>
+          <ThemedText style={[styles.retryButtonText, { color: buttonTextColor }]}>Retry</ThemedText>
         </Pressable>
       </ThemedView>
     </View>
@@ -331,8 +333,8 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   retryButtonText: {
-    color: '#FFFFFF',
     fontWeight: '600',
+    // Color applied dynamically via inline style
   },
   // Trip list styles
   tripListContainer: {

@@ -98,6 +98,12 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
     const cameraRef = useRef<MapboxGL.Camera>(null);
     const [isMapReady, setIsMapReady] = useState(false);
 
+    // Theme colors
+    const backgroundColor = useThemeColor({}, 'background');
+    const textColor = useThemeColor({}, 'text');
+    const iconColor = useThemeColor({}, 'icon');
+    const tintColor = useThemeColor({}, 'tint');
+
     // Validate MapBox configuration on mount
     useEffect(() => {
       if (!MapBoxAdapter.isConfigured()) {
@@ -167,9 +173,9 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
   // Show placeholder if Mapbox is not available
   if (!MapboxGL) {
     return (
-      <View style={[styles.container, styles.placeholderContainer]}>
-        <Text style={styles.placeholderTitle}>Map Not Available</Text>
-        <Text style={styles.placeholderText}>
+      <View style={[styles.container, styles.placeholderContainer, { backgroundColor }]}>
+        <Text style={[styles.placeholderTitle, { color: textColor }]}>Map Not Available</Text>
+        <Text style={[styles.placeholderText, { color: iconColor }]}>
           Mapbox requires a development build.{'\n'}
           Run: npx expo run:android or npx expo run:ios
         </Text>
@@ -180,9 +186,9 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
   // Show loading state while waiting for position (unless there's a GPS error or explicit centerPosition)
   if (!isMapReady) {
     return (
-      <View style={[styles.container, styles.placeholderContainer]}>
-        <ActivityIndicator size="large" color="#3B82F6" />
-        <Text style={styles.loadingText}>Loading map...</Text>
+      <View style={[styles.container, styles.placeholderContainer, { backgroundColor }]}>
+        <ActivityIndicator size="large" color={tintColor} />
+        <Text style={[styles.loadingText, { color: iconColor }]}>Loading map...</Text>
       </View>
     );
   }
@@ -190,9 +196,9 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
   // Safety check - should not happen due to isMapReady logic, but TypeScript needs it
   if (!mapCenter) {
     return (
-      <View style={[styles.container, styles.placeholderContainer]}>
-        <ActivityIndicator size="large" color="#3B82F6" />
-        <Text style={styles.loadingText}>Waiting for location...</Text>
+      <View style={[styles.container, styles.placeholderContainer, { backgroundColor }]}>
+        <ActivityIndicator size="large" color={tintColor} />
+        <Text style={[styles.loadingText, { color: iconColor }]}>Waiting for location...</Text>
       </View>
     );
   }
@@ -221,19 +227,19 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
           animationDuration={1000}
         />
 
-        {/* User location indicator - custom marker using GPS Adapter data */}
+        {/* User location indicator - rendered FIRST so it appears on top of polylines */}
         {showUserLocation && userPosition && (
           <MapboxGL.PointAnnotation
             id="user-location"
             coordinate={userPosition}
           >
             <View style={styles.userLocationMarker}>
-              <View style={styles.userLocationDot} />
+              <View style={[styles.userLocationDot, { backgroundColor: tintColor, borderColor: backgroundColor }]} />
             </View>
           </MapboxGL.PointAnnotation>
         )}
 
-        {/* Render polylines (trip routes) */}
+        {/* Render polylines (trip routes) - render AFTER user location */}
         {polylines.map((polyline) => (
           <MapboxGL.ShapeSource
             key={`polyline-${polyline.id}`}
@@ -297,7 +303,7 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
             <View
               style={[
                 styles.featureMarker,
-                { backgroundColor: getFeatureColor(feature) },
+                { backgroundColor: getFeatureColor(feature), borderColor: backgroundColor },
               ]}
             />
             <MapboxGL.Callout title={feature.properties?.location_description ?? feature.type} />
@@ -329,9 +335,8 @@ const styles = StyleSheet.create({
     width: 16,
     height: 16,
     borderRadius: 8,
-    backgroundColor: '#4285F4', // Google Maps blue
+    // backgroundColor and borderColor applied dynamically
     borderWidth: 3,
-    borderColor: '#FFFFFF',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.3,
@@ -343,7 +348,7 @@ const styles = StyleSheet.create({
     height: 24,
     borderRadius: 12,
     borderWidth: 3,
-    borderColor: '#FFFFFF',
+    // borderColor applied dynamically
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
@@ -358,24 +363,24 @@ const styles = StyleSheet.create({
   placeholderContainer: {
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#e0e0e0',
+    // backgroundColor applied dynamically
     padding: 20,
   },
   placeholderTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#333',
+    // color applied dynamically
     marginBottom: 12,
   },
   placeholderText: {
     fontSize: 14,
-    color: '#666',
+    // color applied dynamically
     textAlign: 'center',
     lineHeight: 20,
   },
   loadingText: {
     fontSize: 16,
-    color: '#666',
+    // color applied dynamically
     marginTop: 12,
     textAlign: 'center',
   },

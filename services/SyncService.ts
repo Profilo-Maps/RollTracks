@@ -12,8 +12,8 @@ import { DataService, Trip } from '../adapters/DatabaseAdapter';
 // --- Constants ---
 
 const STORAGE_KEY_SYNC_QUEUE = '@rolltracks/sync_queue';
-const SYNC_RETRY_DELAY_MS = 5000; // 5 seconds between retry attempts
-const MAX_RETRY_ATTEMPTS = 3; // Max retries before giving up on current attempt
+const SYNC_RETRY_DELAY_MS = 30000; // 30 seconds between retry attempts (increased from 5s)
+const MAX_RETRY_ATTEMPTS = 10; // Max retries before marking as failed (increased from 3)
 
 // --- Types ---
 
@@ -70,6 +70,25 @@ class SyncServiceClass {
     }
 
     await this.loadQueueFromStorage();
+    
+    // One-time cleanup: Remove any items with parse errors or invalid geometry
+    // This handles migrations and format changes
+    const itemsToClean = this.syncQueue.filter(
+      item => (
+        (item.error?.includes('invalid geometry') || 
+         item.error?.includes('parse error')) &&
+        item.attempts >= MAX_RETRY_ATTEMPTS
+      )
+    );
+    
+    if (itemsToClean.length > 0) {
+      console.log(`[SyncService] Cleaning up ${itemsToClean.length} failed items from queue`);
+      for (const item of itemsToClean) {
+        console.log(`[SyncService] Removing: ${item.queueId} - ${item.error}`);
+        await this.removeFromQueue(item.queueId);
+      }
+    }
+    
     this.isInitialized = true;
 
     // Set up network state listener for automatic retry on connectivity restore
@@ -210,6 +229,10 @@ class SyncServiceClass {
       this.lastSuccessfulSync = new Date().toISOString();
 
       console.log('[SyncService] Trip synced successfully:', savedTrip.tripId);
+      
+      // Cache the raw trip data for immediate display
+      await this.cacheRawTrip(savedTrip.tripId, savedTrip, true);
+      
       return savedTrip;
     } catch (error) {
       // Upload failed - update queue item with error
@@ -221,6 +244,13 @@ class SyncServiceClass {
 
       console.warn('[SyncService] Upload failed, trip queued for retry:', error);
 
+      // Cache with queue ID for display even though not synced
+      const tempTrip: Trip = {
+        ...tripData,
+        tripId: queueId, // Use queue ID as temporary trip ID
+      };
+      await this.cacheRawTrip(queueId, tempTrip, false);
+
       // Schedule retry
       this.scheduleRetry();
 
@@ -231,10 +261,25 @@ class SyncServiceClass {
   /**
    * Manually trigger a sync attempt for all queued trips.
    * Useful for retry buttons or when connectivity is restored.
+   * Optionally resets retry counts for failed items.
    */
-  async retrySync(): Promise<void> {
+  async retrySync(resetFailedItems: boolean = false): Promise<void> {
     if (!this.isInitialized) {
       await this.initialize();
+    }
+
+    // Reset retry counts for failed items if requested
+    if (resetFailedItems) {
+      const failedItems = this.syncQueue.filter(item => item.attempts >= MAX_RETRY_ATTEMPTS);
+      if (failedItems.length > 0) {
+        console.log(`[SyncService] Resetting retry counts for ${failedItems.length} failed item(s)`);
+        for (const item of failedItems) {
+          await this.updateQueueItem(item.queueId, {
+            attempts: 0,
+            error: null,
+          });
+        }
+      }
     }
 
     await this.processSyncQueue();
@@ -262,6 +307,40 @@ class SyncServiceClass {
   }
 
   /**
+   * Get detailed information about queued trips for debugging.
+   * Returns queue items with their error messages and attempt counts.
+   */
+  getQueueDebugInfo(): Array<{
+    queueId: string;
+    attempts: number;
+    maxRetries: number;
+    lastAttempt: string | null;
+    error: string | null;
+    tripInfo: {
+      mode: string;
+      userId: string;
+      hasGeometry: boolean;
+      coordinateCount: number;
+    };
+  }> {
+    return this.syncQueue.map(item => ({
+      queueId: item.queueId,
+      attempts: item.attempts,
+      maxRetries: MAX_RETRY_ATTEMPTS,
+      lastAttempt: item.lastAttempt,
+      error: item.error,
+      tripInfo: {
+        mode: item.tripData.mode,
+        userId: item.tripData.userId,
+        hasGeometry: !!item.tripData.geometry,
+        coordinateCount: Array.isArray((item.tripData.geometry as any)?.coordinates)
+          ? (item.tripData.geometry as any).coordinates.length
+          : 0,
+      },
+    }));
+  }
+
+  /**
    * Clear the entire sync queue.
    * WARNING: This will permanently delete all unsent trips!
    * Only use this for testing or explicit user action.
@@ -270,6 +349,28 @@ class SyncServiceClass {
     this.syncQueue = [];
     await this.saveQueueToStorage();
     console.log('[SyncService] Queue cleared');
+  }
+
+  /**
+   * Remove failed items from the queue (items that have reached max retries).
+   * This is useful for cleaning up the queue without deleting items that might still succeed.
+   */
+  async clearFailedItems(): Promise<void> {
+    const failedItems = this.syncQueue.filter(item => item.attempts >= MAX_RETRY_ATTEMPTS);
+    
+    if (failedItems.length === 0) {
+      console.log('[SyncService] No failed items to clear');
+      return;
+    }
+
+    console.log(`[SyncService] Clearing ${failedItems.length} failed item(s)`);
+    
+    for (const item of failedItems) {
+      console.error(`[SyncService] Removing failed item ${item.queueId}: ${item.error}`);
+      await this.removeFromQueue(item.queueId);
+    }
+    
+    console.log('[SyncService] Failed items cleared');
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -377,11 +478,30 @@ class SyncServiceClass {
     tripData: Omit<Trip, 'tripId'>
   ): Promise<Trip> {
     try {
+      console.log(`[SyncService] Attempting upload for ${queueId}`);
+      console.log(`[SyncService] Trip data:`, {
+        userId: tripData.userId,
+        mode: tripData.mode,
+        geometryType: tripData.geometry?.type,
+        coordinateCount: Array.isArray((tripData.geometry as any)?.coordinates) 
+          ? (tripData.geometry as any).coordinates.length 
+          : 0,
+      });
+      
       // Call DataService to write to Supabase
       const savedTrip = await DataService.writeTrip(tripData);
+      
+      console.log(`[SyncService] Upload successful for ${queueId}, server trip_id: ${savedTrip.tripId}`);
       return savedTrip;
     } catch (error) {
       console.error(`[SyncService] Upload failed for ${queueId}:`, error);
+      
+      // Log more details about the error
+      if (error instanceof Error) {
+        console.error(`[SyncService] Error message: ${error.message}`);
+        console.error(`[SyncService] Error stack:`, error.stack);
+      }
+      
       throw error;
     }
   }
@@ -409,57 +529,102 @@ class SyncServiceClass {
 
     // Process each item in queue
     const itemsToProcess = [...this.syncQueue]; // Copy to avoid mutation during iteration
+    const itemsToRemove: string[] = []; // Track items to remove after processing
 
     for (const item of itemsToProcess) {
-      // Skip if already attempted too many times
+      // Skip if already attempted too many times (but don't remove - keep for manual retry)
       if (item.attempts >= MAX_RETRY_ATTEMPTS) {
         console.warn(
-          `[SyncService] Skipping ${item.queueId} - max retries (${MAX_RETRY_ATTEMPTS}) reached`
+          `[SyncService] Skipping ${item.queueId} - max retries (${MAX_RETRY_ATTEMPTS}) reached. Last error: ${item.error}`
         );
         continue;
       }
 
       try {
-        console.log(`[SyncService] Uploading ${item.queueId} (attempt ${item.attempts + 1})`);
+        console.log(`[SyncService] Uploading ${item.queueId} (attempt ${item.attempts + 1}/${MAX_RETRY_ATTEMPTS})`);
+
+        // Validate geometry before upload
+        if (!this.isValidGeometry(item.tripData.geometry)) {
+          throw new Error('Invalid geometry format - must be valid GeoJSON LineString');
+        }
 
         const savedTrip = await this.uploadTrip(item.queueId, item.tripData);
 
         // Success - remove from queue
-        await this.removeFromQueue(item.queueId);
+        itemsToRemove.push(item.queueId);
         this.lastSuccessfulSync = new Date().toISOString();
 
         console.log('[SyncService] Successfully uploaded:', savedTrip.tripId);
       } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Upload failed';
+        const newAttemptCount = item.attempts + 1;
+        
         // Upload failed - update attempt count
         await this.updateQueueItem(item.queueId, {
-          attempts: item.attempts + 1,
+          attempts: newAttemptCount,
           lastAttempt: new Date().toISOString(),
-          error: error instanceof Error ? error.message : 'Upload failed',
+          error: errorMsg,
         });
 
         console.error(
-          `[SyncService] Upload failed for ${item.queueId} (attempt ${item.attempts + 1}):`,
-          error
+          `[SyncService] Upload failed for ${item.queueId} (attempt ${newAttemptCount}/${MAX_RETRY_ATTEMPTS}):`,
+          errorMsg
         );
-
-        // If this was not the last retry, wait before next item
-        if (item.attempts + 1 < MAX_RETRY_ATTEMPTS) {
-          await this.delay(SYNC_RETRY_DELAY_MS);
-        }
       }
+    }
+
+    // Remove only successful items
+    for (const queueId of itemsToRemove) {
+      await this.removeFromQueue(queueId);
     }
 
     this.isSyncing = false;
 
-    // If there are still items in queue, schedule another retry
-    if (this.syncQueue.length > 0) {
+    // Schedule retry if there are items remaining that haven't hit max retries
+    const remainingItems = this.syncQueue.filter(item => item.attempts < MAX_RETRY_ATTEMPTS);
+    if (remainingItems.length > 0) {
       console.log(
-        `[SyncService] ${this.syncQueue.length} item(s) remaining in queue, scheduling retry`
+        `[SyncService] ${remainingItems.length} item(s) remaining in queue, scheduling retry`
       );
       this.scheduleRetry();
+    } else if (this.syncQueue.length > 0) {
+      console.warn(
+        `[SyncService] ${this.syncQueue.length} item(s) in queue have reached max retries. Use clearFailedItems() or retrySync() to retry.`
+      );
     } else {
-      console.log('[SyncService] Queue processing complete - all trips synced');
+      console.log('[SyncService] Queue processing complete');
     }
+  }
+
+  /**
+   * Validate that geometry is a valid encoded polyline string.
+   * Polylines should be non-empty strings.
+   */
+  private isValidGeometry(geometry: unknown): boolean {
+    if (!geometry) {
+      console.error('[SyncService] Geometry validation failed: geometry is null or undefined');
+      return false;
+    }
+
+    if (typeof geometry !== 'string') {
+      console.error('[SyncService] Geometry validation failed: geometry is not a string, got:', typeof geometry);
+      return false;
+    }
+
+    if (geometry.length === 0) {
+      console.error('[SyncService] Geometry validation failed: geometry string is empty');
+      return false;
+    }
+
+    // Basic validation: polyline strings should be ASCII characters
+    // and typically contain letters, numbers, and special characters
+    if (geometry.length < 10) {
+      console.error('[SyncService] Geometry validation failed: polyline string too short (< 10 chars):', geometry.length);
+      return false;
+    }
+
+    console.log('[SyncService] Geometry validation passed: polyline string length:', geometry.length);
+    return true;
   }
 
   /**

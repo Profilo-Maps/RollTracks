@@ -1,4 +1,5 @@
 import { DataService, Trip, TripSummary } from '@/adapters/DatabaseAdapter';
+import * as polyline from '@mapbox/polyline';
 
 // ═══════════════════════════════════════════════════════════
 // HISTORY SERVICE
@@ -18,6 +19,26 @@ export interface HistoryOverview {
 }
 
 class HistoryServiceClass {
+  /**
+   * Decode an encoded polyline string to GeoJSON LineString coordinates
+   * Converts from [lat, lon] (polyline format) to [lon, lat] (GeoJSON format)
+   * 
+   * @param encodedPolyline - Encoded polyline string
+   * @returns Array of [longitude, latitude] coordinates
+   */
+  decodePolyline(encodedPolyline: string): Array<[number, number]> {
+    try {
+      // Decode polyline to [lat, lon] pairs
+      const latLngPairs = polyline.decode(encodedPolyline);
+      
+      // Convert to [lon, lat] for GeoJSON format
+      return latLngPairs.map(([lat, lon]) => [lon, lat]);
+    } catch (error) {
+      console.error('[HistoryService] Failed to decode polyline:', error);
+      return [];
+    }
+  }
+
   /**
    * Get trip summaries for the Trip History screen
    * Returns lightweight trip data for card display
