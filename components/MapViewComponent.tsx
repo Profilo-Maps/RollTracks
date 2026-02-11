@@ -1,6 +1,6 @@
 import { MapBoxAdapter, MapStyles } from '@/adapters/MapBoxAdapter';
-import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 
 // Conditionally import Mapbox - will be null if not in development build
 let MapboxGL: any = null;
@@ -72,6 +72,7 @@ export interface MapViewComponentProps {
   zoomLevel?: number;
   showUserLocation?: boolean;
   mapStyle?: typeof MapStyles[keyof typeof MapStyles]; // MapBox style from adapter
+  gpsError?: boolean; // Indicates GPS permission denied or other error
 }
 
 // Default center (can be overridden by userPosition or centerPosition)
@@ -91,9 +92,11 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
     zoomLevel = DEFAULT_ZOOM,
     showUserLocation = true,
     mapStyle = MapStyles.STREETS,
+    gpsError = false,
   }, ref) => {
     const mapRef = useRef<MapboxGL.MapView>(null);
     const cameraRef = useRef<MapboxGL.Camera>(null);
+    const [isMapReady, setIsMapReady] = useState(false);
 
     // Validate MapBox configuration on mount
     useEffect(() => {
@@ -102,9 +105,17 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
       }
     }, []);
 
+    // Determine if map should be shown
+    // Show map when: centerPosition is provided, OR userPosition is available, OR there's a GPS error (fallback to default)
+    useEffect(() => {
+      if (centerPosition || userPosition || gpsError) {
+        setIsMapReady(true);
+      }
+    }, [centerPosition, userPosition, gpsError]);
+
     // Update camera when user position changes (only if no explicit centerPosition)
     useEffect(() => {
-      if (cameraRef.current && userPosition && !centerPosition) {
+      if (cameraRef.current && userPosition && !centerPosition && isMapReady) {
         console.log('[MapViewComponent] Updating camera to user position:', userPosition);
         cameraRef.current.setCamera({
           centerCoordinate: userPosition,
@@ -112,10 +123,10 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
           animationDuration: 1000,
         });
       }
-    }, [userPosition, centerPosition, zoomLevel]);
+    }, [userPosition, centerPosition, zoomLevel, isMapReady]);
 
-    // Determine the center: props centerPosition > userPosition > default
-    const mapCenter = centerPosition ?? userPosition ?? DEFAULT_CENTER;
+    // Determine the center: props centerPosition > userPosition > default (only if GPS error)
+    const mapCenter = centerPosition ?? userPosition ?? (gpsError ? DEFAULT_CENTER : null);
 
     // Handle recentering to user position
     const handleRecenter = () => {
@@ -162,6 +173,26 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
           Mapbox requires a development build.{'\n'}
           Run: npx expo run:android or npx expo run:ios
         </Text>
+      </View>
+    );
+  }
+
+  // Show loading state while waiting for position (unless there's a GPS error or explicit centerPosition)
+  if (!isMapReady) {
+    return (
+      <View style={[styles.container, styles.placeholderContainer]}>
+        <ActivityIndicator size="large" color="#3B82F6" />
+        <Text style={styles.loadingText}>Loading map...</Text>
+      </View>
+    );
+  }
+
+  // Safety check - should not happen due to isMapReady logic, but TypeScript needs it
+  if (!mapCenter) {
+    return (
+      <View style={[styles.container, styles.placeholderContainer]}>
+        <ActivityIndicator size="large" color="#3B82F6" />
+        <Text style={styles.loadingText}>Waiting for location...</Text>
       </View>
     );
   }
@@ -341,6 +372,12 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
     lineHeight: 20,
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 12,
+    textAlign: 'center',
   },
 });
 
