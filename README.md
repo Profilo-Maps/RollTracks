@@ -156,6 +156,7 @@ ActiveTripScreen → TripService → NativeAdapter → Native GPS
   - `HistoryService.ts` - Trip retrieval and statistics
 - `/contexts` - React Context providers
   - `AuthContext.tsx` - User authentication state
+  - `MapContext.tsx` - Shared map state across screens
   - `TourContext.tsx` - Onboarding tour state
 - `/assets` - Static resources (images, local data)
   - `data/Blocks.geojson` - Census block polygons for anonymization clipping
@@ -382,7 +383,14 @@ interface Trip {
 - `userPosition` - Current GPS position (from NativeAdapter)
 - `interactionState` - Interactive or dimmed
 - `mapStyle` - MapBox style (from MapBoxAdapter)
+- `gpsError` - Indicates GPS permission denied or other error
 - `onRecenter` - Recenter button callback
+
+**Loading Behavior:**
+- Map waits to render until user position is available
+- Shows loading spinner while waiting for GPS data
+- Falls back to San Francisco default center only if `gpsError` is true
+- Prevents unwanted "jump" from default location to user position
 
 **Data Flow:**
 - Screens fetch data from Services
@@ -398,9 +406,75 @@ import { MapStyles } from '@/adapters/MapBoxAdapter';
 <MapViewComponent
   polylines={tripRoutes}
   userPosition={currentLocation}
+  gpsError={hasGpsError}
   mapStyle={MapStyles.STREETS}
   onRecenter={handleRecenter}
 />
+```
+
+### MapContext
+
+**Purpose:** Provides shared map state across all screens in the main navigation flow
+
+**Benefits:**
+- Single MapView instance persists across navigation
+- Map tiles don't reload when switching screens
+- Smooth transitions - UI moves around a fixed map background
+- Screens contribute their data to the shared map via context
+
+**Implementation:**
+- `MapProvider` wraps the `(main)/_layout.tsx` to provide context
+- MapView rendered once at layout level with data from context
+- Screens use `useMap()` hook to update map state
+
+**Context Values:**
+- `polylines` - Trip routes to display
+- `polygonOutlines` - Census block outlines
+- `features` - Point markers (future use)
+- `userPosition` - Current GPS location
+- `centerPosition` - Optional explicit center
+- `zoomLevel` - Map zoom level
+- `mapStyle` - MapBox style selection
+- `gpsError` - GPS error state
+
+**Usage Example:**
+
+```tsx
+import { useMap } from '@/contexts/MapContext';
+
+function HomeScreen() {
+  const { setPolylines, setUserPosition } = useMap();
+  
+  useEffect(() => {
+    // Update map with trip data
+    const trips = await HistoryService.getUserTrips();
+    const polylines = trips.map(trip => ({
+      id: trip.tripId,
+      coordinates: trip.geometry.coordinates,
+      color: getModeColor(trip.mode),
+    }));
+    setPolylines(polylines);
+  }, []);
+  
+  useEffect(() => {
+    // Update user position
+    const position = await NativeAdapter.getCurrentPosition();
+    setUserPosition([position.longitude, position.latitude]);
+  }, []);
+  
+  return <View>{/* Screen content */}</View>;
+}
+```
+
+**Architecture:**
+```
+app/(main)/_layout.tsx
+  └─ MapProvider
+      └─ MapViewComponent (persistent, receives data from context)
+      └─ Slot (screens render here)
+          └─ HomeScreen (uses useMap() to update map data)
+          └─ ActiveTripScreen (uses useMap() to update map data)
+          └─ TripSummaryScreen (uses useMap() to update map data)
 ```
 
 ### BasemapLayout
