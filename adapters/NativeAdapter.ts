@@ -1,10 +1,12 @@
 import * as Location from 'expo-location';
 
 // ═══════════════════════════════════════════════════════════
-// GPS ADAPTER
+// NATIVE ADAPTER
 // ═══════════════════════════════════════════════════════════
-// Source of truth for GPS data. Receives location from native API
-// and serves it to Trip Service and screens for MapView display.
+// Source of truth for native device functionality. Currently handles
+// GPS location data from native API, serving it to Trip Service and
+// screens for MapView display. Will be expanded to include other
+// native device capabilities.
 
 export interface GPSCoordinate {
   latitude: number;
@@ -19,14 +21,14 @@ export interface GPSPermissionStatus {
   canAskAgain: boolean;
 }
 
-export class GPSAdapterError extends Error {
+export class NativeAdapterError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'GPSAdapterError';
+    this.name = 'NativeAdapterError';
   }
 }
 
-class GPSAdapterClass {
+class NativeAdapterClass {
   private locationSubscription: Location.LocationSubscription | null = null;
 
   /**
@@ -43,31 +45,42 @@ class GPSAdapterClass {
 
   /**
    * Request location permissions from the user.
-   * Throws GPSAdapterError if permissions are denied.
+   * Returns true if granted, false if denied.
+   * Does not throw errors - use for initial permission requests.
    */
-  async requestPermissions(): Promise<void> {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      throw new GPSAdapterError('Location permission denied. Please enable location services in your device settings.');
+  async requestPermissions(): Promise<boolean> {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        console.warn('[NativeAdapter] Location permission denied');
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.error('[NativeAdapter] Failed to request permissions:', error);
+      return false;
     }
   }
 
   /**
    * Ensure permissions are granted, requesting if necessary.
    * Call this before starting a trip or accessing location.
-   * Throws GPSAdapterError if permissions cannot be obtained.
+   * Throws NativeAdapterError if permissions cannot be obtained.
    */
   async ensurePermissions(): Promise<void> {
     const { granted } = await this.checkPermissions();
     if (!granted) {
-      await this.requestPermissions();
+      const permissionGranted = await this.requestPermissions();
+      if (!permissionGranted) {
+        throw new NativeAdapterError('Location permission denied. Please enable location services in your device settings.');
+      }
     }
   }
 
   /**
    * Get the current GPS position.
    * Used by screens to display user location on map.
-   * Throws GPSAdapterError if permissions not granted or GPS unavailable.
+   * Throws NativeAdapterError if permissions not granted or GPS unavailable.
    */
   async getCurrentPosition(): Promise<GPSCoordinate> {
     await this.ensurePermissions();
@@ -85,7 +98,7 @@ class GPSAdapterClass {
         timestamp: location.timestamp,
       };
     } catch (error) {
-      throw new GPSAdapterError(`Failed to get current position: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new NativeAdapterError(`Failed to get current position: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -131,7 +144,7 @@ class GPSAdapterClass {
         }
       );
     } catch (error) {
-      throw new GPSAdapterError(`Failed to start watching position: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new NativeAdapterError(`Failed to start watching position: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -154,7 +167,7 @@ class GPSAdapterClass {
     try {
       return await Location.hasServicesEnabledAsync();
     } catch (error) {
-      console.error('[GPSAdapter] Failed to check location services:', error);
+      console.error('[NativeAdapter] Failed to check location services:', error);
       return false;
     }
   }
@@ -195,4 +208,4 @@ class GPSAdapterClass {
 }
 
 // Export singleton instance
-export const GPSAdapter = new GPSAdapterClass();
+export const NativeAdapter = new NativeAdapterClass();

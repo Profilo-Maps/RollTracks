@@ -10,7 +10,11 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.rolltracks.app"
+      "bundleIdentifier": "com.rolltracks.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "RollTracks needs your location to record your trips and display your route on the map.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "RollTracks needs your location to record your trips and display your route on the map."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -25,7 +29,19 @@
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION"
-      ]
+      ],
+      "config": {
+        "googleMaps": {
+          "apiKey": ""
+        }
+      },
+      "statusBar": {
+        "translucent": true,
+        "backgroundColor": "transparent"
+      },
+      "navigationBar": {
+        "visible": false
+      }
     },
     "web": {
       "output": "static",

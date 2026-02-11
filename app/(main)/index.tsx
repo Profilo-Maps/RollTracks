@@ -1,29 +1,43 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, ActivityIndicator } from 'react-native';
-import { BasemapLayout } from '@/layouts/BasemapLayout';
+import { Trip } from '@/adapters/DatabaseAdapter';
+import { NativeAdapter } from '@/adapters/NativeAdapter';
 import { BottomNavigationBarComponent } from '@/components/BottomNavigationBarComponent';
+import { Feature, MapViewComponentRef, Polyline } from '@/components/MapViewComponent';
 import { RecenterButton } from '@/components/RecenterButton';
-import { MapViewComponentRef, Polyline, Feature } from '@/components/MapViewComponent';
-import { HistoryService } from '@/services/HistoryService';
-import { useAuth } from '@/contexts/AuthContext';
-import { Trip, RatedFeature, CorrectedSegment } from '@/adapters/DatabaseAdapter';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { useAuth } from '@/contexts/AuthContext';
+import { useThemeColor } from '@/hooks/use-theme-color';
+import { BasemapLayout } from '@/layouts/BasemapLayout';
+import { HistoryService } from '@/services/HistoryService';
+import { TripService } from '@/services/TripService';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 /**
  * Home Screen
  * Built with Basemap Layout.
  *
  * Features:
+ * - Profile button in header slot (right side)
  * - Bottom Navigation Bar in footer slot
  * - Recenter button in secondary footer slot (right side)
  * - Displays all trip polyline data using History Service
  * - In DataRanger mode: shows rated features, unrated features along routes, recorded segments
  * - Map zoom automatically fits all trip data
+ * - Checks for orphaned trips on mount and prompts user
  */
 export default function HomeScreen() {
   const { user } = useAuth();
+  const router = useRouter();
   const mapRef = useRef<MapViewComponentRef>(null);
+  const insets = useSafeAreaInsets();
+
+  // Theme colors
+  const tintColor = useThemeColor({}, 'tint');
+  const backgroundColor = useThemeColor({}, 'background');
 
   // State for trip data
   const [trips, setTrips] = useState<Trip[]>([]);
@@ -32,7 +46,69 @@ export default function HomeScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch trip data and convert to polylines/features for map display
+  // State for user location from GPS Adapter
+  const [userPosition, setUserPosition] = useState<[number, number] | null>(null);
+
+  // State for orphaned trip modal
+  const [shouldShowOrphanedTripModal, setShouldShowOrphanedTripModal] = useState(false);
+
+  // Check for orphaned trips when user logs in (only once per login session)
+  useEffect(() => {
+    const checkForOrphanedTrips = async () => {
+      if (!user) return;
+
+      try {
+        const orphanedTrip = await TripService.checkForOrphanedTrip();
+        if (orphanedTrip) {
+          console.log('[HomeScreen] Orphaned trip detected on mount, showing modal');
+          setShouldShowOrphanedTripModal(true);
+        }
+      } catch (error) {
+        console.error('[HomeScreen] Failed to check for orphaned trips:', error);
+      }
+    };
+
+    checkForOrphanedTrips();
+  }, [user]);
+
+  // Get user's current location from GPS Adapter and update periodically
+  useEffect(() => {
+    let isSubscribed = true;
+
+    const updateUserLocation = async () => {
+      try {
+        // Check if permissions are granted
+        const { granted } = await NativeAdapter.checkPermissions();
+        if (!granted) {
+          console.log('[HomeScreen] GPS permissions not granted, skipping location update');
+          return;
+        }
+
+        // Get current position
+        const position = await NativeAdapter.getCurrentPosition();
+        if (isSubscribed) {
+          setUserPosition([position.longitude, position.latitude]);
+          console.log('[HomeScreen] User position updated:', position.latitude, position.longitude);
+        }
+      } catch (error) {
+        console.error('[HomeScreen] Failed to get user position:', error);
+        // Don't set error state - just log it
+      }
+    };
+
+    // Get initial position
+    updateUserLocation();
+
+    // Update position every 10 seconds
+    const intervalId = setInterval(updateUserLocation, 10000);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(intervalId);
+    };
+  }, []);
+
+  // Fetch trip data and convert to polylines for map display
   useEffect(() => {
     const loadTripData = async () => {
       try {
@@ -40,7 +116,7 @@ export default function HomeScreen() {
         setError(null);
 
         // Fetch completed trips for map display
-        const completedTrips = await HistoryService.getCompletedTripsForMap();
+        const completedTrips = await HistoryService.getUserTrips({ status: 'completed' });
         setTrips(completedTrips);
 
         // Convert trips to polylines for MapView
@@ -52,40 +128,8 @@ export default function HomeScreen() {
         }));
         setPolylines(tripPolylines);
 
-        // If DataRanger mode is on, fetch and display rated features and corrections
-        if (user?.dataRangerMode) {
-          const [ratings, corrections] = await Promise.all([
-            HistoryService.getUserRatings(),
-            HistoryService.getUserCorrections(),
-          ]);
-
-          // Convert ratings to feature markers
-          const ratingFeatures: Feature[] = ratings.map((rating) => ({
-            id: `rating-${rating.id}`,
-            coordinate: [rating.long, rating.lat],
-            type: 'curb_ramp',
-            properties: {
-              rated: true,
-              condition_score: rating.conditionScore,
-              location_description: rating.crisId,
-            },
-          }));
-
-          // Convert corrections to feature markers (using first coordinate of line)
-          const correctionFeatures: Feature[] = corrections.map((correction) => ({
-            id: `correction-${correction.id}`,
-            coordinate: correction.geometry.coordinates[0] as [number, number],
-            type: 'segment',
-            properties: {
-              flag_status: true,
-              from_st: correction.correctedSegmentId,
-            },
-          }));
-
-          setFeatures([...ratingFeatures, ...correctionFeatures]);
-        } else {
-          setFeatures([]);
-        }
+        // Clear features (DataRanger functionality removed)
+        setFeatures([]);
       } catch (err) {
         console.error('[HomeScreen] Failed to load trip data:', err);
         setError('Failed to load trip data');
@@ -95,7 +139,7 @@ export default function HomeScreen() {
     };
 
     loadTripData();
-  }, [user?.dataRangerMode]);
+  }, []);
 
   // Get color based on transport mode
   const getModeColor = (mode: string): string => {
@@ -110,11 +154,12 @@ export default function HomeScreen() {
   };
 
   // Calculate bounding box for all trips to set initial map view
+  // If no trips, return undefined so map uses userPosition
   const calculateMapBounds = (): {
     centerCoordinate: [number, number];
     zoomLevel: number;
   } | undefined => {
-    if (polylines.length === 0) return undefined;
+    if (polylines.length === 0) return undefined; // Let map use userPosition
 
     let minLat = Infinity;
     let maxLat = -Infinity;
@@ -153,10 +198,38 @@ export default function HomeScreen() {
 
   const mapBounds = calculateMapBounds();
 
+  // Navigate to profile screen
+  const handleProfilePress = () => {
+    router.push('/(auth)/profile');
+  };
+
   // Handle recenter button press
   const handleRecenter = () => {
     mapRef.current?.recenter();
   };
+
+  // Handle orphaned trip modal visibility changes
+  const handleModalVisibilityChange = (visible: boolean) => {
+    // When modal closes, reset the auto-open flag
+    if (!visible) {
+      setShouldShowOrphanedTripModal(false);
+    }
+  };
+
+  // Render header with profile button
+  const renderHeader = () => (
+    <View style={[styles.headerContainer, { paddingTop: insets.top + 8 }]}>
+      <Pressable 
+        style={[styles.profileButton, { backgroundColor }]}
+        onPress={handleProfilePress}
+        accessibilityLabel="Open profile"
+        accessibilityHint="Navigate to your profile settings"
+        accessibilityRole="button"
+      >
+        <Ionicons name="person-circle-outline" size={32} color={tintColor} />
+      </Pressable>
+    </View>
+  );
 
   // Render secondary footer with recenter button
   const renderSecondaryFooter = () => (
@@ -165,13 +238,19 @@ export default function HomeScreen() {
 
   // Render footer with bottom navigation bar
   const renderFooter = () => (
-    <BottomNavigationBarComponent />
+    <BottomNavigationBarComponent
+      autoOpenModal={shouldShowOrphanedTripModal}
+      onModalVisibilityChange={handleModalVisibilityChange}
+    />
   );
 
   // Render loading state
   if (isLoading) {
     return (
       <BasemapLayout
+        userPosition={userPosition}
+        showUserLocation={true}
+        header={renderHeader()}
         footer={renderFooter()}
         secondaryFooter={renderSecondaryFooter()}
       >
@@ -189,6 +268,9 @@ export default function HomeScreen() {
   if (error) {
     return (
       <BasemapLayout
+        userPosition={userPosition}
+        showUserLocation={true}
+        header={renderHeader()}
         footer={renderFooter()}
         secondaryFooter={renderSecondaryFooter()}
       >
@@ -206,6 +288,9 @@ export default function HomeScreen() {
   if (trips.length === 0) {
     return (
       <BasemapLayout
+        userPosition={userPosition}
+        showUserLocation={true}
+        header={renderHeader()}
         footer={renderFooter()}
         secondaryFooter={renderSecondaryFooter()}
       >
@@ -232,7 +317,9 @@ export default function HomeScreen() {
       features={features}
       centerPosition={mapBounds?.centerCoordinate}
       zoomLevel={mapBounds?.zoomLevel}
+      userPosition={userPosition}
       showUserLocation={true}
+      header={renderHeader()}
       footer={renderFooter()}
       secondaryFooter={renderSecondaryFooter()}
     />
@@ -240,6 +327,23 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  headerContainer: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  profileButton: {
+    padding: 8,
+    marginLeft: 8,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',

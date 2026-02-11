@@ -1,4 +1,4 @@
-import { DataService, Trip, TripSummary, RatedFeature, CorrectedSegment } from '@/adapters/DatabaseAdapter';
+import { DataService, Trip, TripSummary } from '@/adapters/DatabaseAdapter';
 
 // ═══════════════════════════════════════════════════════════
 // HISTORY SERVICE
@@ -6,9 +6,8 @@ import { DataService, Trip, TripSummary, RatedFeature, CorrectedSegment } from '
 // Provides trip history data to Trip History, Trip Summary, and Home screens.
 // Screens pass this data to MapView Component as props for visualization.
 
-export interface TripWithContributions extends Trip {
-  ratings: RatedFeature[];
-  corrections: CorrectedSegment[];
+export interface TripFilter {
+  status?: 'active' | 'paused' | 'completed';
 }
 
 export interface HistoryOverview {
@@ -16,14 +15,12 @@ export interface HistoryOverview {
   totalTrips: number;
   totalDistance: number;
   totalDuration: number;
-  totalRatings: number;
-  totalCorrections: number;
 }
 
 class HistoryServiceClass {
   /**
    * Get trip summaries for the Trip History screen
-   * Returns lightweight trip data with rating/correction counts for card display
+   * Returns lightweight trip data for card display
    */
   async getTripSummaries(): Promise<TripSummary[]> {
     try {
@@ -48,79 +45,36 @@ class HistoryServiceClass {
   }
 
   /**
-   * Get trip with all associated ratings and corrections (DataRanger mode)
-   * Used by Trip Summary screen when DataRanger mode is active
-   */
-  async getTripWithContributions(tripId: string): Promise<TripWithContributions | null> {
-    try {
-      const trip = await DataService.getTrip(tripId);
-      if (!trip) return null;
-
-      const [ratings, corrections] = await Promise.all([
-        DataService.getRatingsForTrip(tripId),
-        DataService.getCorrectionsForTrip(tripId),
-      ]);
-
-      return {
-        ...trip,
-        ratings,
-        corrections,
-      };
-    } catch (error) {
-      console.error('[HistoryService] Failed to fetch trip with contributions:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Get all trips for the current user (Home screen)
+   * Get trips for the current user with optional filtering
    * Returns full trip data including polylines for map display
+   * 
+   * @param filter - Optional filter criteria (e.g., { status: 'completed' })
+   * @returns Array of trips matching the filter
+   * 
+   * @example
+   * // Get all trips
+   * const allTrips = await HistoryService.getUserTrips();
+   * 
+   * // Get only completed trips for map display
+   * const completedTrips = await HistoryService.getUserTrips({ status: 'completed' });
    */
-  async getAllUserTrips(): Promise<Trip[]> {
-    try {
-      return await DataService.getUserTrips();
-    } catch (error) {
-      console.error('[HistoryService] Failed to fetch user trips:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Get only completed trips with polyline data for map display
-   * Used by Home screen to show trip history overlay on map
-   */
-  async getCompletedTripsForMap(): Promise<Trip[]> {
+  async getUserTrips(filter?: TripFilter): Promise<Trip[]> {
     try {
       const trips = await DataService.getUserTrips();
-      return trips.filter((trip) => trip.status === 'completed');
-    } catch (error) {
-      console.error('[HistoryService] Failed to fetch completed trips:', error);
-      throw error;
-    }
-  }
+      
+      if (!filter) {
+        return trips;
+      }
 
-  /**
-   * Get ratings for a specific trip (DataRanger mode)
-   * Used by Trip Summary screen to display rated features on map
-   */
-  async getRatingsForTrip(tripId: string): Promise<RatedFeature[]> {
-    try {
-      return await DataService.getRatingsForTrip(tripId);
+      // Apply filters
+      return trips.filter((trip) => {
+        if (filter.status && trip.status !== filter.status) {
+          return false;
+        }
+        return true;
+      });
     } catch (error) {
-      console.error('[HistoryService] Failed to fetch ratings for trip:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Get corrections for a specific trip (DataRanger mode)
-   * Used by Trip Summary screen to display corrected segments on map
-   */
-  async getCorrectionsForTrip(tripId: string): Promise<CorrectedSegment[]> {
-    try {
-      return await DataService.getCorrectionsForTrip(tripId);
-    } catch (error) {
-      console.error('[HistoryService] Failed to fetch corrections for trip:', error);
+      console.error('[HistoryService] Failed to fetch user trips:', error);
       throw error;
     }
   }
@@ -131,8 +85,7 @@ class HistoryServiceClass {
    */
   async getHistoryOverview(): Promise<HistoryOverview> {
     try {
-      const trips = await DataService.getUserTrips();
-      const completedTrips = trips.filter((trip) => trip.status === 'completed');
+      const completedTrips = await this.getUserTrips({ status: 'completed' });
 
       const totalDistance = completedTrips.reduce(
         (sum, trip) => sum + (trip.distanceMi || 0),
@@ -143,22 +96,54 @@ class HistoryServiceClass {
         0,
       );
 
-      // Get all ratings and corrections for the user
-      const [ratings, corrections] = await Promise.all([
-        DataService.getUserRatings(),
-        DataService.getUserCorrections(),
-      ]);
-
       return {
         trips: completedTrips,
         totalTrips: completedTrips.length,
         totalDistance,
         totalDuration,
-        totalRatings: ratings.length,
-        totalCorrections: corrections.length,
       };
     } catch (error) {
       console.error('[HistoryService] Failed to fetch history overview:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get profile statistics for the current user
+   * Used by Profile screen to display summary stats
+   */
+  async getProfileStatistics(): Promise<{
+    avgTripLength: number;
+    avgTripDuration: number;
+    totalTrips: number;
+  }> {
+    try {
+      const completedTrips = await this.getUserTrips({ status: 'completed' });
+
+      if (completedTrips.length === 0) {
+        return {
+          avgTripLength: 0,
+          avgTripDuration: 0,
+          totalTrips: 0,
+        };
+      }
+
+      const totalDistance = completedTrips.reduce(
+        (sum, trip) => sum + (trip.distanceMi || 0),
+        0,
+      );
+      const totalDuration = completedTrips.reduce(
+        (sum, trip) => sum + (trip.durationS || 0),
+        0,
+      );
+
+      return {
+        avgTripLength: totalDistance / completedTrips.length,
+        avgTripDuration: totalDuration / completedTrips.length,
+        totalTrips: completedTrips.length,
+      };
+    } catch (error) {
+      console.error('[HistoryService] Failed to fetch profile statistics:', error);
       throw error;
     }
   }

@@ -1,7 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createClient, Session, SupabaseClient } from '@supabase/supabase-js';
-import * as Crypto from 'expo-crypto';
 import argon2 from '@sphereon/react-native-argon2';
+import { createClient, Session, SupabaseClient } from '@supabase/supabase-js';
+import Constants from 'expo-constants';
+import * as Crypto from 'expo-crypto';
+import { Platform } from 'react-native';
 
 // ═══════════════════════════════════════════════════════════
 // DATABASE ADAPTER — PUBLIC INTERFACES
@@ -67,18 +69,26 @@ export interface IAuthService {
 
 // --- Data Types ---
 
+export type TimeOfDayBin = 'late_night' | 'early_morning' | 'morning_rush' | 'midday' | 'evening_rush' | 'evening' | 'night';
+
 export interface Trip {
   tripId: string;
   userId: string;
   mode: string;
   comfort: number;
   purpose: string;
-  startTime: string;
-  endTime?: string;
+  timeOfDay: TimeOfDayBin; // Binned time of day
+  weekday: number; // 1 for weekdays, 0 for weekends/holidays
   durationS?: number;
   distanceMi?: number;
   status: 'active' | 'paused' | 'completed';
-  geometry: GeoJSON.LineString;
+  reachedDest?: boolean; // Whether user reported reaching their destination
+  geometry: GeoJSON.LineString; // Coordinates with relative timestamps in properties.times
+  featuresRated?: number; // DataRanger mode: count of rated features
+  segmentsCorrected?: number; // DataRanger mode: count of corrected segments
+  devicePlatform?: string; // Device platform (ios, android, web)
+  deviceOsVersion?: string; // OS version (e.g., "iOS 17.2", "Android 14")
+  appVersion?: string; // App version from package.json
 }
 
 export interface RatedFeature {
@@ -106,17 +116,20 @@ export interface CorrectedSegment {
 export interface TripSummary {
   tripId: string;
   mode: string;
-  startTime: string;
+  purpose: string;
+  timeOfDay: TimeOfDayBin;
+  weekday: number;
   durationS: number;
   distanceMi: number;
+  reachedDest?: boolean;
   ratingCount?: number;
   correctionCount?: number;
 }
 
 export interface IDataService {
   // --- Trip Operations ---
-  /** Write a new trip to the database */
-  writeTrip(tripData: Omit<Trip, 'tripId'>): Promise<Trip>;
+  /** Write a new trip to the database (accepts startTime for binning, not stored) */
+  writeTrip(tripData: Omit<Trip, 'tripId' | 'timeOfDay' | 'weekday'> & { startTime: string }): Promise<Trip>;
 
   /** Update an existing trip (e.g., status, end_time, duration) */
   updateTrip(tripId: string, updates: Partial<Trip>): Promise<Trip>;
@@ -282,6 +295,67 @@ async function _verifyPassword(password: string, hash: string): Promise<boolean>
     console.error('[_verifyPassword] Error:', error);
     return false;
   }
+}
+
+// --- Time Binning Utilities ---
+
+/**
+ * Bin a timestamp into a time of day category.
+ * Bins:
+ * - late_night:    00:00 - 05:00
+ * - early_morning: 05:00 - 07:00
+ * - morning_rush:  07:00 - 10:00
+ * - midday:        10:00 - 16:00
+ * - evening_rush:  16:00 - 19:00
+ * - evening:       19:00 - 22:00
+ * - night:         22:00 - 24:00
+ */
+function _getTimeOfDayBin(timestamp: string): TimeOfDayBin {
+  const date = new Date(timestamp);
+  const hour = date.getHours();
+
+  if (hour >= 0 && hour < 5) return 'late_night';
+  if (hour >= 5 && hour < 7) return 'early_morning';
+  if (hour >= 7 && hour < 10) return 'morning_rush';
+  if (hour >= 10 && hour < 16) return 'midday';
+  if (hour >= 16 && hour < 19) return 'evening_rush';
+  if (hour >= 19 && hour < 22) return 'evening';
+  return 'night';
+}
+
+/**
+ * Determine if a timestamp is a weekday or weekend/holiday.
+ * Returns 1 for weekdays (Mon-Fri), 0 for weekends (Sat-Sun).
+ * Note: Holiday detection not yet implemented, treats holidays as regular weekdays.
+ */
+function _getWeekdayBin(timestamp: string): number {
+  const date = new Date(timestamp);
+  const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
+
+  // Return 1 for weekdays (Mon-Fri), 0 for weekends (Sat-Sun)
+  return (dayOfWeek >= 1 && dayOfWeek <= 5) ? 1 : 0;
+}
+
+// --- Device Info Utilities ---
+
+/**
+ * Get device and app information for tracking and debugging.
+ * Returns platform, OS version, and app version.
+ */
+function _getDeviceInfo(): {
+  devicePlatform: string;
+  deviceOsVersion: string;
+  appVersion: string;
+} {
+  const platform = Platform.OS; // 'ios', 'android', 'web'
+  const osVersion = Platform.Version?.toString() || 'unknown';
+  const appVersion = Constants.expoConfig?.version || '1.0.0';
+
+  return {
+    devicePlatform: platform,
+    deviceOsVersion: `${platform === 'ios' ? 'iOS' : platform === 'android' ? 'Android' : 'Web'} ${osVersion}`,
+    appVersion,
+  };
 }
 
 // --- Session ---
@@ -603,7 +677,18 @@ async function _deleteAllUserData(userId: string): Promise<void> {
 
 // --- trips ---
 
-async function _insertTrip(tripData: Omit<Trip, 'tripId'>): Promise<Trip> {
+/**
+ * Insert a new trip into the database.
+ * Accepts a startTime parameter for binning purposes (not stored).
+ * Bins the startTime into timeOfDay and weekday before storage.
+ */
+async function _insertTrip(
+  tripData: Omit<Trip, 'tripId' | 'timeOfDay' | 'weekday'> & { startTime: string }
+): Promise<Trip> {
+  // Bin the startTime into time_of_day and weekday
+  const timeOfDay = _getTimeOfDayBin(tripData.startTime);
+  const weekday = _getWeekdayBin(tripData.startTime);
+
   const { data, error } = await supabase
     .from('trips')
     .insert({
@@ -611,12 +696,16 @@ async function _insertTrip(tripData: Omit<Trip, 'tripId'>): Promise<Trip> {
       mode: tripData.mode,
       comfort: tripData.comfort,
       purpose: tripData.purpose,
-      start_time: tripData.startTime,
-      end_time: tripData.endTime,
+      time_of_day: timeOfDay,
+      weekday: weekday,
       duration_s: tripData.durationS,
       distance_mi: tripData.distanceMi,
       status: tripData.status,
+      reached_dest: tripData.reachedDest ?? null,
       geometry: tripData.geometry,
+      device_platform: tripData.devicePlatform,
+      device_os_version: tripData.deviceOsVersion,
+      app_version: tripData.appVersion,
     })
     .select()
     .single();
@@ -631,12 +720,16 @@ async function _insertTrip(tripData: Omit<Trip, 'tripId'>): Promise<Trip> {
     mode: data.mode,
     comfort: data.comfort,
     purpose: data.purpose,
-    startTime: data.start_time,
-    endTime: data.end_time,
+    timeOfDay: data.time_of_day,
+    weekday: data.weekday,
     durationS: data.duration_s,
     distanceMi: data.distance_mi,
     status: data.status,
+    reachedDest: data.reached_dest,
     geometry: data.geometry,
+    devicePlatform: data.device_platform,
+    deviceOsVersion: data.device_os_version,
+    appVersion: data.app_version,
   };
 }
 
@@ -645,10 +738,12 @@ async function _updateTrip(tripId: string, updates: Partial<Trip>): Promise<Trip
   if (updates.mode !== undefined) dbUpdates.mode = updates.mode;
   if (updates.comfort !== undefined) dbUpdates.comfort = updates.comfort;
   if (updates.purpose !== undefined) dbUpdates.purpose = updates.purpose;
-  if (updates.endTime !== undefined) dbUpdates.end_time = updates.endTime;
+  if (updates.timeOfDay !== undefined) dbUpdates.time_of_day = updates.timeOfDay;
+  if (updates.weekday !== undefined) dbUpdates.weekday = updates.weekday;
   if (updates.durationS !== undefined) dbUpdates.duration_s = updates.durationS;
   if (updates.distanceMi !== undefined) dbUpdates.distance_mi = updates.distanceMi;
   if (updates.status !== undefined) dbUpdates.status = updates.status;
+  if (updates.reachedDest !== undefined) dbUpdates.reached_dest = updates.reachedDest;
   if (updates.geometry !== undefined) dbUpdates.geometry = updates.geometry;
 
   const { data, error } = await supabase
@@ -668,11 +763,12 @@ async function _updateTrip(tripId: string, updates: Partial<Trip>): Promise<Trip
     mode: data.mode,
     comfort: data.comfort,
     purpose: data.purpose,
-    startTime: data.start_time,
-    endTime: data.end_time,
+    timeOfDay: data.time_of_day,
+    weekday: data.weekday,
     durationS: data.duration_s,
     distanceMi: data.distance_mi,
     status: data.status,
+    reachedDest: data.reached_dest,
     geometry: data.geometry,
   };
 }
@@ -692,12 +788,16 @@ async function _getTrip(tripId: string): Promise<Trip | null> {
     mode: data.mode,
     comfort: data.comfort,
     purpose: data.purpose,
-    startTime: data.start_time,
-    endTime: data.end_time,
+    timeOfDay: data.time_of_day,
+    weekday: data.weekday,
     durationS: data.duration_s,
     distanceMi: data.distance_mi,
     status: data.status,
+    reachedDest: data.reached_dest,
     geometry: data.geometry,
+    devicePlatform: data.device_platform,
+    deviceOsVersion: data.device_os_version,
+    appVersion: data.app_version,
   };
 }
 
@@ -706,7 +806,7 @@ async function _getUserTrips(userId: string): Promise<Trip[]> {
     .from('trips')
     .select('*')
     .eq('user_id', userId)
-    .order('start_time', { ascending: false });
+    .order('trip_id', { ascending: false }); // Order by trip_id (contains timestamp)
 
   if (error) {
     throw new Error(`Failed to fetch trips: ${error.message}`);
@@ -718,22 +818,26 @@ async function _getUserTrips(userId: string): Promise<Trip[]> {
     mode: row.mode,
     comfort: row.comfort,
     purpose: row.purpose,
-    startTime: row.start_time,
-    endTime: row.end_time,
+    timeOfDay: row.time_of_day,
+    weekday: row.weekday,
     durationS: row.duration_s,
     distanceMi: row.distance_mi,
     status: row.status,
+    reachedDest: row.reached_dest,
     geometry: row.geometry,
+    devicePlatform: row.device_platform,
+    deviceOsVersion: row.device_os_version,
+    appVersion: row.app_version,
   }));
 }
 
 async function _getTripSummaries(userId: string): Promise<TripSummary[]> {
   const { data: trips, error } = await supabase
     .from('trips')
-    .select('trip_id, mode, start_time, duration_s, distance_mi')
+    .select('trip_id, mode, purpose, time_of_day, weekday, duration_s, distance_mi, reached_dest')
     .eq('user_id', userId)
     .eq('status', 'completed')
-    .order('start_time', { ascending: false });
+    .order('trip_id', { ascending: false }); // Order by trip_id (contains timestamp)
 
   if (error) {
     throw new Error(`Failed to fetch trip summaries: ${error.message}`);
@@ -774,9 +878,12 @@ async function _getTripSummaries(userId: string): Promise<TripSummary[]> {
   return trips.map((t) => ({
     tripId: t.trip_id,
     mode: t.mode,
-    startTime: t.start_time,
+    purpose: t.purpose,
+    timeOfDay: t.time_of_day,
+    weekday: t.weekday,
     durationS: t.duration_s,
     distanceMi: t.distance_mi,
+    reachedDest: t.reached_dest,
     ratingCount: ratingsByTrip[t.trip_id] || 0,
     correctionCount: correctionsByTrip[t.trip_id] || 0,
   }));
@@ -1094,6 +1201,7 @@ export const AuthService: IAuthService = {
       // Check if this session belongs to the user trying to log in
       if (existingSession.user.id === linkedUserId) {
         console.log('[login] Same device re-login - session matches user');
+        
         const profile = await _getUserProfile(linkedUserId);
         if (!profile) {
           throw new Error('Profile not found for existing session.');
