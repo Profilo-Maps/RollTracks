@@ -84,6 +84,8 @@ export interface Trip {
   status: 'active' | 'paused' | 'completed';
   reachedDest?: boolean; // Whether user reported reaching their destination
   geometry: GeoJSON.LineString; // Coordinates with relative timestamps in properties.times
+  odGeoids?: [string, string] | null; // [origin_geoid, destination_geoid] for clipped blocks
+  odBlockPolygons?: [GeoJSON.Polygon, GeoJSON.Polygon] | null; // Block geometries for display
   featuresRated?: number; // DataRanger mode: count of rated features
   segmentsCorrected?: number; // DataRanger mode: count of corrected segments
   devicePlatform?: string; // Device platform (ios, android, web)
@@ -773,6 +775,44 @@ async function _updateTrip(tripId: string, updates: Partial<Trip>): Promise<Trip
   };
 }
 
+/**
+ * Helper function to fetch census block polygons for origin/destination display
+ * @param geoids Array of [origin_geoid, destination_geoid]
+ * @returns Array of [origin_polygon, destination_polygon] or null
+ */
+async function _getBlockPolygons(
+  geoids: string[] | null,
+): Promise<[GeoJSON.Polygon, GeoJSON.Polygon] | null> {
+  if (!geoids || geoids.length !== 2) return null;
+
+  const [originGeoid, destGeoid] = geoids;
+  if (!originGeoid && !destGeoid) return null;
+
+  try {
+    // Fetch both blocks in a single query
+    const { data, error } = await supabase
+      .from('census_blocks')
+      .select('geoid20, geom')
+      .in('geoid20', [originGeoid, destGeoid].filter(Boolean));
+
+    if (error || !data) return null;
+
+    // Map geoids to polygons
+    const blockMap = new Map(data.map((block) => [block.geoid20, block.geom]));
+
+    const originPolygon = originGeoid ? blockMap.get(originGeoid) : null;
+    const destPolygon = destGeoid ? blockMap.get(destGeoid) : null;
+
+    // Return null if we couldn't find both blocks
+    if (!originPolygon || !destPolygon) return null;
+
+    return [originPolygon, destPolygon];
+  } catch (error) {
+    console.error('[DatabaseAdapter] Failed to fetch block polygons:', error);
+    return null;
+  }
+}
+
 async function _getTrip(tripId: string): Promise<Trip | null> {
   const { data, error } = await supabase
     .from('trips')
@@ -781,6 +821,9 @@ async function _getTrip(tripId: string): Promise<Trip | null> {
     .single();
 
   if (error || !data) return null;
+
+  // Fetch block polygons if od_geoids is present
+  const odBlockPolygons = await _getBlockPolygons(data.od_geoids);
 
   return {
     tripId: data.trip_id,
@@ -795,6 +838,8 @@ async function _getTrip(tripId: string): Promise<Trip | null> {
     status: data.status,
     reachedDest: data.reached_dest,
     geometry: data.geometry,
+    odGeoids: data.od_geoids,
+    odBlockPolygons,
     devicePlatform: data.device_platform,
     deviceOsVersion: data.device_os_version,
     appVersion: data.app_version,
@@ -812,23 +857,34 @@ async function _getUserTrips(userId: string): Promise<Trip[]> {
     throw new Error(`Failed to fetch trips: ${error.message}`);
   }
 
-  return (data || []).map((row) => ({
-    tripId: row.trip_id,
-    userId: row.user_id,
-    mode: row.mode,
-    comfort: row.comfort,
-    purpose: row.purpose,
-    timeOfDay: row.time_of_day,
-    weekday: row.weekday,
-    durationS: row.duration_s,
-    distanceMi: row.distance_mi,
-    status: row.status,
-    reachedDest: row.reached_dest,
-    geometry: row.geometry,
-    devicePlatform: row.device_platform,
-    deviceOsVersion: row.device_os_version,
-    appVersion: row.app_version,
-  }));
+  // Fetch block polygons for all trips with od_geoids
+  const tripsWithBlocks = await Promise.all(
+    (data || []).map(async (row) => {
+      const odBlockPolygons = await _getBlockPolygons(row.od_geoids);
+      
+      return {
+        tripId: row.trip_id,
+        userId: row.user_id,
+        mode: row.mode,
+        comfort: row.comfort,
+        purpose: row.purpose,
+        timeOfDay: row.time_of_day,
+        weekday: row.weekday,
+        durationS: row.duration_s,
+        distanceMi: row.distance_mi,
+        status: row.status,
+        reachedDest: row.reached_dest,
+        geometry: row.geometry,
+        odGeoids: row.od_geoids,
+        odBlockPolygons,
+        devicePlatform: row.device_platform,
+        deviceOsVersion: row.device_os_version,
+        appVersion: row.app_version,
+      };
+    }),
+  );
+
+  return tripsWithBlocks;
 }
 
 async function _getTripSummaries(userId: string): Promise<TripSummary[]> {
