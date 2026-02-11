@@ -1,9 +1,9 @@
+import { Slot } from 'expo-router';
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
-import { Slot } from 'expo-router';
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors } from '@/constants/theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 
 /**
  * Basemap Layout
@@ -74,8 +74,8 @@ const styles = StyleSheet.create({
   },
   headerSlot: {
     // Transparent header area - screens can add content
-    paddingTop: 50, // Account for status bar
-    paddingHorizontal: 16,
+    paddingTop: 0, // No padding - screens handle their own safe area
+    paddingHorizontal: 0,
   },
   bodySlot: {
     flex: 1,
@@ -83,12 +83,12 @@ const styles = StyleSheet.create({
   },
   secondaryFooterSlot: {
     // Above the footer - for floating buttons like recenter
-    paddingHorizontal: 16,
-    paddingBottom: 8,
+    paddingHorizontal: 0,
+    paddingBottom: 0,
   },
   footerSlot: {
     // Bottom navigation bar area
-    paddingBottom: 34, // Account for safe area
-    paddingHorizontal: 16,
+    paddingBottom: 0, // No padding - BottomNavigationBarComponent handles safe area
+    paddingHorizontal: 0,
   },
 });

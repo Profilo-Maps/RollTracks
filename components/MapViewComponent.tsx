@@ -25,6 +25,14 @@ export interface Polyline {
   width?: number;
 }
 
+// Types for polygon outlines (census blocks)
+export interface PolygonOutline {
+  id: string;
+  coordinates: [number, number][][]; // Array of rings (outer ring + holes)
+  color?: string;
+  width?: number;
+}
+
 // Types for feature markers (curb ramps, obstacles)
 export interface Feature {
   id: string;
@@ -54,6 +62,7 @@ export interface MapViewComponentRef {
 // Props interface following the architecture spec
 export interface MapViewComponentProps {
   polylines?: Polyline[];
+  polygonOutlines?: PolygonOutline[];
   features?: Feature[];
   centerPosition?: [number, number]; // [longitude, latitude]
   interactionState?: InteractionState;
@@ -72,6 +81,7 @@ const DEFAULT_ZOOM = 15;
 export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponentProps>(
   ({
     polylines = [],
+    polygonOutlines = [],
     features = [],
     centerPosition,
     interactionState = 'interactive',
@@ -166,6 +176,11 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
         pitchEnabled={!isDimmed}
         rotateEnabled={!isDimmed}
         zoomEnabled={!isDimmed}
+        scaleBarEnabled={false}
+        compassEnabled={false}
+        logoEnabled={false}
+        attributionEnabled={true}
+        attributionPosition={{ bottom: 8, right: 8 }}
       >
         <MapboxGL.Camera
           ref={cameraRef}
@@ -208,6 +223,33 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
                 lineWidth: polyline.width ?? 4,
                 lineCap: 'round',
                 lineJoin: 'round',
+              }}
+            />
+          </MapboxGL.ShapeSource>
+        ))}
+
+        {/* Render polygon outlines (census blocks) */}
+        {polygonOutlines.map((polygon) => (
+          <MapboxGL.ShapeSource
+            key={`polygon-${polygon.id}`}
+            id={`polygon-source-${polygon.id}`}
+            shape={{
+              type: 'Feature',
+              properties: {},
+              geometry: {
+                type: 'Polygon',
+                coordinates: polygon.coordinates,
+              },
+            }}
+          >
+            <MapboxGL.LineLayer
+              id={`polygon-layer-${polygon.id}`}
+              style={{
+                lineColor: polygon.color ?? '#FF6B6B',
+                lineWidth: polygon.width ?? 2,
+                lineCap: 'round',
+                lineJoin: 'round',
+                lineDasharray: [2, 2], // Dashed line for block outlines
               }}
             />
           </MapboxGL.ShapeSource>

@@ -9,12 +9,14 @@ Create an anonymized, open dataset of non-car transport activity for routing and
 ## Key Features
 
 - **Trip Recording**: Track and record user routes with mode, comfort level, and trip purpose
-- **DataRanger Mode**: Advanced tools for assessing and updating urban infrastructure data
-  - Validate city-assigned condition scores of curb ramps
-  - Correct AI-generated sidewalk network data
-  - Rate features and correct segments during trips
-- **Privacy-First**: Anonymous user accounts with username/PIN recovery (no email collection)
+- **Post-Trip Survey**: After each trip, users answer "Did you reach your destination?" to help analyze trip completion rates and routing effectiveness
+- **Privacy-First Architecture**:
+  - Anonymous Supabase accounts with username/password recovery (no email collection)
+  - Time-binned data storage (7 time-of-day bins + weekday/weekend indicator)
+  - Relative timestamps in GPS tracks (prevents exact trip timing reconstruction)
+  - Server-side census block clipping removes trip origins and destinations
 - **Multi-Device Support**: Data migration between devices using recovery credentials
+- **Offline Capability**: Local trip buffering with automatic sync when connectivity returns
 
 ## User Modes
 
@@ -22,7 +24,7 @@ Wheelchair, skateboard, assisted walking, walking, scooter
 
 ## Data Collection
 
-- Route polylines with GPS tracking
-- Feature ratings (curb ramps, obstacles)
-- Segment corrections (sidewalk network improvements)
-- Trip metadata (mode, comfort, duration, distance)
+- Route polylines with GPS tracking and relative timestamps
+- Trip metadata (mode, comfort, purpose, duration, distance, completion status)
+- Device and software version tracking (platform, OS version, app version)
+- Privacy-preserving binned temporal data (time-of-day bins, weekday/weekend indicator)

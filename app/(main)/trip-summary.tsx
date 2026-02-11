@@ -32,6 +32,7 @@ export default function TripSummaryScreen() {
   // State
   const [trip, setTrip] = useState<Trip | null>(null);
   const [polyline, setPolyline] = useState<Polyline | null>(null);
+  const [blockOutlines, setBlockOutlines] = useState<PolygonOutline[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -98,6 +99,32 @@ export default function TripSummaryScreen() {
           width: 5,
         };
         setPolyline(tripPolyline);
+
+        // Convert block polygons to outlines for map display
+        if (tripData.odBlockPolygons) {
+          const [originPolygon, destPolygon] = tripData.odBlockPolygons;
+          const outlines: PolygonOutline[] = [];
+
+          if (originPolygon) {
+            outlines.push({
+              id: `origin-${tripData.tripId}`,
+              coordinates: originPolygon.coordinates,
+              color: '#FF6B6B', // Red for origin
+              width: 2,
+            });
+          }
+
+          if (destPolygon) {
+            outlines.push({
+              id: `dest-${tripData.tripId}`,
+              coordinates: destPolygon.coordinates,
+              color: '#4ECDC4', // Teal for destination
+              width: 2,
+            });
+          }
+
+          setBlockOutlines(outlines);
+        }
       } catch (err) {
         console.error('[TripSummaryScreen] Failed to load trip data:', err);
         setError('Failed to load trip data');
@@ -258,6 +285,7 @@ export default function TripSummaryScreen() {
     <BasemapLayout
       ref={mapRef}
       polylines={polyline ? [polyline] : []}
+      polygonOutlines={blockOutlines}
       centerPosition={mapBounds?.centerCoordinate}
       zoomLevel={mapBounds?.zoomLevel}
       showUserLocation={false}

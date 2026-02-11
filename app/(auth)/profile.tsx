@@ -6,6 +6,7 @@ import { BottomNavigationBarComponent } from '@/components/BottomNavigationBarCo
 import SelectModeListComponent from '@/components/SelectModeListComponent';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { ThemeSliderComponent } from '@/components/ThemeSliderComponent';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
@@ -158,27 +159,12 @@ export default function ProfileScreen() {
     }
   };
 
-  const handleThemeChange = async () => {
+  const handleThemeChange = async (newTheme: 'light' | 'auto' | 'dark') => {
     try {
-      // Cycle through: auto -> light -> dark -> auto
-      const nextTheme = themePreference === 'auto' ? 'light' : themePreference === 'light' ? 'dark' : 'auto';
-      await setThemePreference(nextTheme);
+      await setThemePreference(newTheme);
     } catch (error) {
       console.error('Theme change failed:', error);
       Alert.alert('Error', 'Failed to change theme. Please try again.');
-    }
-  };
-
-  const getThemeLabel = () => {
-    switch (themePreference) {
-      case 'light':
-        return 'Light';
-      case 'dark':
-        return 'Dark';
-      case 'auto':
-        return 'Auto';
-      default:
-        return 'Auto';
     }
   };
 
@@ -258,17 +244,13 @@ export default function ProfileScreen() {
         <ThemedView style={styles.section}>
           <ThemedText type="subtitle">Settings</ThemedText>
 
-          <Pressable style={styles.settingRow} onPress={handleThemeChange}>
+          <View style={styles.settingRow}>
             <ThemedText>Theme</ThemedText>
-            <View style={[
-              styles.toggle,
-              { backgroundColor: tintColor }
-            ]}>
-              <ThemedText style={styles.toggleText}>
-                {getThemeLabel()}
-              </ThemedText>
-            </View>
-          </Pressable>
+            <ThemeSliderComponent
+              value={themePreference}
+              onChange={handleThemeChange}
+            />
+          </View>
 
           <Pressable style={styles.settingRow} onPress={handleToggleDataRanger}>
             <ThemedText>DataRanger Mode</ThemedText>

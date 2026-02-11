@@ -21,8 +21,11 @@
 - Native GPS via Expo APIs
 
 ### Backend & Storage
-- `@supabase/supabase-js` - Backend database and auth
+- `@supabase/supabase-js` (^2.95.3) - Backend database and auth
 - `@react-native-async-storage/async-storage` - Local storage
+- `@sphereon/isomorphic-argon2` (^1.0.1) - Password hashing (Argon2id)
+- `@sphereon/react-native-argon2` (^2.0.9) - Native Argon2 bindings
+- `expo-crypto` (~15.0.8) - Cryptographically secure random generation
 
 ### Other
 - `expo-haptics` - Haptic feedback
@@ -54,12 +57,21 @@ npm run reset-project  # Reset to blank project
 
 ## Testing Setup
 
-- **Jest** (30.2.0) with `ts-jest` for TypeScript support
+- **Jest** (~29.7.0) with `ts-jest` for TypeScript support
 - Test environment: Node
 - Tests located in `__tests__/` directory
 - Mocks in `__mocks__/` directory
 - Path alias: `@/*` maps to project root
 - Accessibility testing with `accessibility-checker` (4.0.11)
+
+## Security
+
+- **Argon2id** password hashing (OWASP recommended)
+- **Anonymous Supabase authentication** with username/password recovery
+- **Row Level Security (RLS)** on all database tables
+- **SECURITY DEFINER functions** to prevent username enumeration
+- **Time binning** for privacy-preserving temporal data
+- **Census block clipping** for origin/destination anonymization
 
 ## TypeScript Configuration
 

@@ -34,21 +34,19 @@ Screens & Components (UI)
 - `AuthContext.tsx` - User authentication state
 - `ThemeContext.tsx` - Theme preference management (light/dark/auto)
 - `TourContext.tsx` - Onboarding tour state
-- `DataRangerContext.tsx` - DataRanger mode state
 
 ### `/services` - Business Logic Layer
-- `TripService.ts` - Trip recording and management
-- `HistoryService.ts` - Trip history retrieval
-- `DataRangerService.ts` - Feature rating and segment correction
-- `SyncService.ts` - Data synchronization buffer
+- `TripService.ts` - Trip recording and management with relative timestamps
+- `HistoryService.ts` - Trip history retrieval with binned temporal data
+- `SyncService.ts` - Offline buffering and sync queue management
 
 ### `/adapters` - External Service Abstraction
-- `DatabaseAdapter.ts` - Database operations (auth + data)
-- `MapBoxAdapter.ts` - Map tile fetching
-- `NativeAdapter.ts` - Native device services (GPS location, etc.)
+- `DatabaseAdapter.ts` - Database operations (auth + data) with time binning
+- `MapBoxAdapter.ts` - Map tile fetching and styles
+- `NativeAdapter.ts` - Native device services (GPS location, permissions)
 
 ### `/assets` - Static Resources
-- `/data` - Local JSON data (CurbRamps.json, Sidewalks.json)
+- `/data` - Census block polygons (Blocks.geojson) for anonymization
 - `/images` - App icons, splash screens, logos
 
 ### `/constants` - Configuration
@@ -57,6 +55,13 @@ Screens & Components (UI)
 ### `/hooks` - Custom React Hooks
 - `use-color-scheme.ts` - Theme detection
 - `use-theme-color.ts` - Theme color utilities
+
+### `/scripts` - Utility Scripts
+- `seed-census-blocks.js` - Loads census blocks into Supabase for anonymization
+
+### `/supabase` - Database Configuration
+- `/migrations` - Database schema migrations and RLS policies
+- `SECURITY_DEFINER_AUDIT.md` - Security audit documentation
 
 ### `/__tests__` - Test Files
 - Test files with `.test.ts` suffix
@@ -75,9 +80,9 @@ Screens & Components (UI)
 
 ### Component Props Pattern
 MapViewComponent example:
-- Accepts: map tiles, polylines, features, center position, interaction state
-- Callbacks: onFeaturePress, onRecenter
-- Does NOT fetch data internally
+- Accepts: polylines, centerPosition, userPosition, interactionState, mapStyle
+- Callbacks: onRecenter
+- Does NOT fetch data internally - screens pass data via props
 
 ### Naming
 - Screens: PascalCase with "Screen" suffix (implied by location)
