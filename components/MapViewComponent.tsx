@@ -1,18 +1,19 @@
 import { MapBoxAdapter, MapStyles } from '@/adapters/MapBoxAdapter';
 import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
-import { StyleSheet, View, Text, Platform } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 
 // Conditionally import Mapbox - will be null if not in development build
 let MapboxGL: any = null;
 try {
   if (Platform.OS !== 'web') {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     MapboxGL = require('@rnmapbox/maps').default;
     // Initialize MapBox with access token from adapter
     if (MapboxGL?.setAccessToken) {
       MapboxGL.setAccessToken(MapBoxAdapter.getAccessToken());
     }
   }
-} catch (error) {
+} catch {
   console.warn('MapboxGL not available - showing placeholder map');
 }
 
@@ -91,6 +92,18 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
       }
     }, []);
 
+    // Update camera when user position changes (only if no explicit centerPosition)
+    useEffect(() => {
+      if (cameraRef.current && userPosition && !centerPosition) {
+        console.log('[MapViewComponent] Updating camera to user position:', userPosition);
+        cameraRef.current.setCamera({
+          centerCoordinate: userPosition,
+          zoomLevel: zoomLevel,
+          animationDuration: 1000,
+        });
+      }
+    }, [userPosition, centerPosition, zoomLevel]);
+
     // Determine the center: props centerPosition > userPosition > default
     const mapCenter = centerPosition ?? userPosition ?? DEFAULT_CENTER;
 
@@ -162,13 +175,16 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
           animationDuration={1000}
         />
 
-        {/* User location indicator */}
-        {showUserLocation && (
-          <MapboxGL.LocationPuck
-            puckBearing="heading"
-            puckBearingEnabled={true}
-            visible={true}
-          />
+        {/* User location indicator - custom marker using GPS Adapter data */}
+        {showUserLocation && userPosition && (
+          <MapboxGL.PointAnnotation
+            id="user-location"
+            coordinate={userPosition}
+          >
+            <View style={styles.userLocationMarker}>
+              <View style={styles.userLocationDot} />
+            </View>
+          </MapboxGL.PointAnnotation>
         )}
 
         {/* Render polylines (trip routes) */}
@@ -229,6 +245,25 @@ const styles = StyleSheet.create({
   },
   map: {
     flex: 1,
+  },
+  userLocationMarker: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  userLocationDot: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#4285F4', // Google Maps blue
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 5,
   },
   featureMarker: {
     width: 24,

@@ -32,6 +32,7 @@ Screens & Components (UI)
 
 ### `/contexts` - React Context Providers
 - `AuthContext.tsx` - User authentication state
+- `ThemeContext.tsx` - Theme preference management (light/dark/auto)
 - `TourContext.tsx` - Onboarding tour state
 - `DataRangerContext.tsx` - DataRanger mode state
 
@@ -44,7 +45,7 @@ Screens & Components (UI)
 ### `/adapters` - External Service Abstraction
 - `DatabaseAdapter.ts` - Database operations (auth + data)
 - `MapBoxAdapter.ts` - Map tile fetching
-- `GPSAdapter.ts` - Native GPS data access
+- `NativeAdapter.ts` - Native device services (GPS location, etc.)
 
 ### `/assets` - Static Resources
 - `/data` - Local JSON data (CurbRamps.json, Sidewalks.json)

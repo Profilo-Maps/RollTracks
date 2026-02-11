@@ -2,12 +2,14 @@
  * BasemapLayout: Default layout for map-based screens
  * 
  * Provides a persistent MapViewComponent as full-screen background with overlay slots:
- * - Header slot at top (respects safe area)
+ * - Header slot at top
  * - Body slot in middle (fills available space)
  * - Secondary footer slot above footer
- * - Footer slot at bottom (respects safe area)
+ * - Footer slot at bottom
  * 
  * All slots are transparent by default to show map through.
+ * Map extends edge-to-edge for immersive experience.
+ * Screens are responsible for their own safe area handling.
  */
 
 import { MapViewComponent, MapViewComponentProps, MapViewComponentRef } from '@/components/MapViewComponent';
@@ -57,7 +59,7 @@ export const BasemapLayout = forwardRef<MapViewComponentRef, BasemapLayoutProps>
 
     return (
       <View style={styles.container}>
-        {/* Map background layer - full screen */}
+        {/* Map background layer - full screen, edge-to-edge */}
         <View style={styles.mapBackground}>
           <MapViewComponent ref={ref} {...mapViewProps} />
         </View>
@@ -101,37 +103,35 @@ BasemapLayout.displayName = 'BasemapLayout';
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#000', // Fallback color while map loads
   },
   mapBackground: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    ...StyleSheet.absoluteFillObject, // Ensures map fills entire screen including edges
   },
   overlayContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    ...StyleSheet.absoluteFillObject, // Ensures overlay fills entire screen
     flexDirection: 'column',
+    pointerEvents: 'box-none', // Allow touches to pass through to map when not hitting overlay content
   },
   headerSlot: {
     width: '100%',
+    pointerEvents: 'box-none', // Allow touches to pass through transparent areas
     // No background color - transparent by default
   },
   bodySlot: {
     flex: 1,
     width: '100%',
+    pointerEvents: 'box-none', // Allow touches to pass through transparent areas
     // No background color - transparent by default
   },
   secondaryFooterSlot: {
     width: '100%',
+    pointerEvents: 'box-none', // Allow touches to pass through transparent areas
     // No background color - transparent by default
   },
   footerSlot: {
     width: '100%',
+    pointerEvents: 'box-none', // Allow touches to pass through transparent areas
     // No background color - transparent by default
   },
 });

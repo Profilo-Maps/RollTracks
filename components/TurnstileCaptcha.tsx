@@ -23,14 +23,19 @@ export default function TurnstileCaptcha({
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // If no site key is configured, skip captcha
-  if (!siteKey || siteKey === 'your_turnstile_site_key_here') {
-    // Auto-pass captcha in development/testing when not configured
-    React.useEffect(() => {
+  // Check if site key is configured
+  const isCaptchaConfigured = siteKey && siteKey !== 'your_turnstile_site_key_here';
+
+  // Auto-pass captcha in development/testing when not configured
+  React.useEffect(() => {
+    if (!isCaptchaConfigured) {
       console.warn('Turnstile site key not configured - captcha bypassed for development');
       onSuccess('dev-bypass-token');
-    }, []);
+    }
+  }, [isCaptchaConfigured, onSuccess]);
 
+  // If no site key is configured, show dev message
+  if (!isCaptchaConfigured) {
     return (
       <View style={styles.container}>
         <Text style={styles.devText}>Captcha disabled (configure EXPO_PUBLIC_TURNSTILE_SITE_KEY)</Text>

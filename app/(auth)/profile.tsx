@@ -1,40 +1,88 @@
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
+import { BottomNavigationBarComponent } from '@/components/BottomNavigationBarComponent';
 import SelectModeListComponent from '@/components/SelectModeListComponent';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import { HistoryService } from '@/services/HistoryService';
 
 /**
  * Profile Screen
  * Part of Auth Stack - manages user account settings.
+ * Accessible from main app via Bottom Navigation Bar.
  *
  * Features:
+ * - Bottom Navigation Bar for navigation
  * - Mode list with modal to edit user's mode list (Select Mode List Component)
  * - User summary statistics:
  *   - Average trip length
  *   - Average trip duration
- *   - Average feature rating (DataRanger mode only)
- *   - Average corrected segment (DataRanger mode only)
+ *   - Total trips
  * - Buttons: Logout, Delete all user data, Toggle DataRanger mode
- *
- * TODO:
- * - Fetch statistics from History Service and DataRanger Service
  */
 export default function ProfileScreen() {
   const router = useRouter();
   const { user, signOut, deleteUserData, toggleDataRangerMode, updateUser } = useAuth();
+  const { themePreference, setThemePreference } = useTheme();
   const [isModeModalVisible, setIsModeModalVisible] = useState(false);
   const [selectedModes, setSelectedModes] = useState<string[]>(user?.modeList ?? []);
+  const [statistics, setStatistics] = useState<{
+    avgTripLength: number;
+    avgTripDuration: number;
+    totalTrips: number;
+  } | null>(null);
+  const [isLoadingStats, setIsLoadingStats] = useState(true);
 
   const buttonPrimaryColor = useThemeColor({}, 'buttonPrimary');
   const buttonDangerColor = useThemeColor({}, 'buttonDanger');
   const buttonTextColor = useThemeColor({}, 'buttonText');
   const backgroundColor = useThemeColor({}, 'background');
   const tintColor = useThemeColor({}, 'tint');
+
+  // Fetch statistics on mount
+  useEffect(() => {
+    loadStatistics();
+  }, []);
+
+  const loadStatistics = async () => {
+    try {
+      setIsLoadingStats(true);
+      const stats = await HistoryService.getProfileStatistics();
+      setStatistics(stats);
+    } catch (error) {
+      console.error('Failed to load statistics:', error);
+      // Set default values on error
+      setStatistics({
+        avgTripLength: 0,
+        avgTripDuration: 0,
+        totalTrips: 0,
+      });
+    } finally {
+      setIsLoadingStats(false);
+    }
+  };
+
+  const formatDistance = (miles: number): string => {
+    if (miles === 0) return '--';
+    return `${miles.toFixed(2)} mi`;
+  };
+
+  const formatDuration = (seconds: number): string => {
+    if (seconds === 0) return '--';
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    
+    if (hours > 0) {
+      return `${hours}h ${remainingMinutes}m`;
+    }
+    return `${minutes}m`;
+  };
 
   const handleLogout = () => {
     Alert.alert(
@@ -110,6 +158,30 @@ export default function ProfileScreen() {
     }
   };
 
+  const handleThemeChange = async () => {
+    try {
+      // Cycle through: auto -> light -> dark -> auto
+      const nextTheme = themePreference === 'auto' ? 'light' : themePreference === 'light' ? 'dark' : 'auto';
+      await setThemePreference(nextTheme);
+    } catch (error) {
+      console.error('Theme change failed:', error);
+      Alert.alert('Error', 'Failed to change theme. Please try again.');
+    }
+  };
+
+  const getThemeLabel = () => {
+    switch (themePreference) {
+      case 'light':
+        return 'Light';
+      case 'dark':
+        return 'Dark';
+      case 'auto':
+        return 'Auto';
+      default:
+        return 'Auto';
+    }
+  };
+
   const handleOpenModeModal = () => {
     setSelectedModes(user?.modeList ?? []);
     setIsModeModalVisible(true);
@@ -126,8 +198,11 @@ export default function ProfileScreen() {
   };
 
   return (
-    <>
-      <ScrollView style={styles.container}>
+    <View style={styles.container}>
+      <ScrollView 
+        style={styles.scrollContainer}
+        contentContainerStyle={styles.scrollContent}
+      >
         <ThemedView style={styles.header}>
           <ThemedText type="title">Profile</ThemedText>
           <ThemedText style={styles.displayName}>
@@ -151,33 +226,49 @@ export default function ProfileScreen() {
         {/* Statistics Section */}
         <ThemedView style={styles.section}>
           <ThemedText type="subtitle">Statistics</ThemedText>
-          <View style={styles.statsGrid}>
-            <View style={styles.statItem}>
-              <ThemedText type="defaultSemiBold">--</ThemedText>
-              <ThemedText style={styles.statLabel}>Avg Length</ThemedText>
+          {isLoadingStats ? (
+            <View style={styles.statsLoading}>
+              <ActivityIndicator size="small" />
             </View>
-            <View style={styles.statItem}>
-              <ThemedText type="defaultSemiBold">--</ThemedText>
-              <ThemedText style={styles.statLabel}>Avg Duration</ThemedText>
+          ) : (
+            <View style={styles.statsGrid}>
+              <View style={styles.statItem}>
+                <ThemedText type="defaultSemiBold">
+                  {formatDistance(statistics?.avgTripLength ?? 0)}
+                </ThemedText>
+                <ThemedText style={styles.statLabel}>Avg Length</ThemedText>
+              </View>
+              <View style={styles.statItem}>
+                <ThemedText type="defaultSemiBold">
+                  {formatDuration(statistics?.avgTripDuration ?? 0)}
+                </ThemedText>
+                <ThemedText style={styles.statLabel}>Avg Duration</ThemedText>
+              </View>
+              <View style={styles.statItem}>
+                <ThemedText type="defaultSemiBold">
+                  {statistics?.totalTrips ?? 0}
+                </ThemedText>
+                <ThemedText style={styles.statLabel}>Total Trips</ThemedText>
+              </View>
             </View>
-            {user?.dataRangerMode && (
-              <>
-                <View style={styles.statItem}>
-                  <ThemedText type="defaultSemiBold">--</ThemedText>
-                  <ThemedText style={styles.statLabel}>Avg Rating</ThemedText>
-                </View>
-                <View style={styles.statItem}>
-                  <ThemedText type="defaultSemiBold">--</ThemedText>
-                  <ThemedText style={styles.statLabel}>Corrections</ThemedText>
-                </View>
-              </>
-            )}
-          </View>
+          )}
         </ThemedView>
 
         {/* Settings Section */}
         <ThemedView style={styles.section}>
           <ThemedText type="subtitle">Settings</ThemedText>
+
+          <Pressable style={styles.settingRow} onPress={handleThemeChange}>
+            <ThemedText>Theme</ThemedText>
+            <View style={[
+              styles.toggle,
+              { backgroundColor: tintColor }
+            ]}>
+              <ThemedText style={styles.toggleText}>
+                {getThemeLabel()}
+              </ThemedText>
+            </View>
+          </Pressable>
 
           <Pressable style={styles.settingRow} onPress={handleToggleDataRanger}>
             <ThemedText>DataRanger Mode</ThemedText>
@@ -214,6 +305,9 @@ export default function ProfileScreen() {
         </ThemedView>
       </ScrollView>
 
+      {/* Bottom Navigation Bar */}
+      <BottomNavigationBarComponent />
+
       {/* Mode Selection Modal */}
       <Modal
         visible={isModeModalVisible}
@@ -248,13 +342,19 @@ export default function ProfileScreen() {
           </ThemedView>
         </View>
       </Modal>
-    </>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  scrollContainer: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 100, // Add padding to ensure content isn't hidden behind navigation bar
   },
   header: {
     padding: 16,
@@ -282,6 +382,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     marginTop: 12,
+  },
+  statsLoading: {
+    paddingVertical: 20,
+    alignItems: 'center',
   },
   statItem: {
     width: '50%',

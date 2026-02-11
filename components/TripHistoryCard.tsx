@@ -36,20 +36,23 @@ export function TripHistoryCard({
   const tintColor = useThemeColor({}, 'tint');
   const iconColor = useThemeColor({}, 'icon');
 
-  // Format date and time
-  const formatDateTime = (dateString: string) => {
-    const date = new Date(dateString);
-    const dateStr = date.toLocaleDateString('en-US', { 
-      month: 'short', 
-      day: 'numeric',
-      year: 'numeric'
-    });
-    const timeStr = date.toLocaleTimeString('en-US', { 
-      hour: 'numeric', 
-      minute: '2-digit',
-      hour12: true
-    });
-    return { dateStr, timeStr };
+  // Format time of day bin to readable text
+  const formatTimeOfDay = (timeOfDay: string): string => {
+    const timeLabels: Record<string, string> = {
+      late_night: 'Late Night',
+      early_morning: 'Early Morning',
+      morning_rush: 'Morning Rush',
+      midday: 'Midday',
+      evening_rush: 'Evening Rush',
+      evening: 'Evening',
+      night: 'Night',
+    };
+    return timeLabels[timeOfDay] || timeOfDay;
+  };
+
+  // Format weekday indicator
+  const formatDayType = (weekday: number): string => {
+    return weekday === 1 ? 'Weekday' : 'Weekend';
   };
 
   // Format duration from seconds to readable format
@@ -92,11 +95,12 @@ export function TripHistoryCard({
     return modeColors[mode.toLowerCase()] ?? '#757575';
   };
 
-  const { dateStr, timeStr } = formatDateTime(trip.startTime);
+  const timeOfDayLabel = formatTimeOfDay(trip.timeOfDay);
+  const dayTypeLabel = formatDayType(trip.weekday);
   const isDrawer = variant === 'drawer';
 
   return (
-    <Pressable 
+    <Pressable
       onPress={onPress}
       style={({ pressed }) => [
         styles.container,
@@ -105,7 +109,7 @@ export function TripHistoryCard({
         pressed && styles.pressed,
       ]}
       accessibilityRole="button"
-      accessibilityLabel={`Trip on ${dateStr} at ${timeStr}, ${trip.mode}, ${formatDuration(trip.durationS)} duration`}
+      accessibilityLabel={`${trip.purpose} trip, ${trip.mode}, ${timeOfDayLabel} on ${dayTypeLabel}, ${formatDuration(trip.durationS ?? 0)} duration`}
     >
       <View style={styles.header}>
         <View style={styles.modeContainer}>
@@ -114,10 +118,10 @@ export function TripHistoryCard({
           </View>
           <View style={styles.headerText}>
             <ThemedText type="defaultSemiBold" style={styles.mode}>
-              {trip.mode}
+              {trip.mode} • {trip.purpose}
             </ThemedText>
             <ThemedText style={styles.dateTime}>
-              {dateStr} • {timeStr}
+              {timeOfDayLabel} • {dayTypeLabel}
             </ThemedText>
           </View>
         </View>
@@ -125,19 +129,23 @@ export function TripHistoryCard({
       </View>
 
       <View style={styles.statsContainer}>
-        <View style={styles.statItem}>
-          <Ionicons name="time-outline" size={16} color={iconColor} style={styles.statIcon} />
-          <ThemedText style={styles.statText}>
-            {formatDuration(trip.durationS)}
-          </ThemedText>
-        </View>
-        
-        <View style={styles.statItem}>
-          <Ionicons name="navigate-outline" size={16} color={iconColor} style={styles.statIcon} />
-          <ThemedText style={styles.statText}>
-            {formatDistance(trip.distanceMi)} mi
-          </ThemedText>
-        </View>
+        {trip.durationS !== undefined && trip.durationS > 0 && (
+          <View style={styles.statItem}>
+            <Ionicons name="time-outline" size={16} color={iconColor} style={styles.statIcon} />
+            <ThemedText style={styles.statText}>
+              {formatDuration(trip.durationS)}
+            </ThemedText>
+          </View>
+        )}
+
+        {trip.distanceMi !== undefined && trip.distanceMi > 0 && (
+          <View style={styles.statItem}>
+            <Ionicons name="navigate-outline" size={16} color={iconColor} style={styles.statIcon} />
+            <ThemedText style={styles.statText}>
+              {formatDistance(trip.distanceMi)} mi
+            </ThemedText>
+          </View>
+        )}
 
         {trip.comfort && (
           <View style={styles.statItem}>
