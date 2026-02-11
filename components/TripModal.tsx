@@ -18,6 +18,7 @@
 
 import { Colors } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { OrphanedTripInfo, TripService } from '@/services/TripService';
 import React, { useEffect, useState } from 'react';
 import {
@@ -28,8 +29,7 @@ import {
     ScrollView,
     StyleSheet,
     TouchableOpacity,
-    View,
-    useColorScheme
+    View
 } from 'react-native';
 import { ThemedText } from './themed-text';
 
@@ -57,8 +57,8 @@ export interface TripModalProps {
 
 export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOrphanedTrip, postTripMode, onPostTripComplete }: TripModalProps) {
   const { user } = useAuth();
-  const colorScheme = useColorScheme();
-  const colors = Colors[colorScheme ?? 'light'];
+  const { colorScheme } = useTheme();
+  const colors = Colors[colorScheme];
 
   // Orphaned trip state
   const [orphanedTrip, setOrphanedTrip] = useState<OrphanedTripInfo | null>(null);

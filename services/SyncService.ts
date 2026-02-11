@@ -71,8 +71,10 @@ class SyncServiceClass {
 
     await this.loadQueueFromStorage();
     
+    // TODO: Re-enable cleanup after debugging startup issue
     // One-time cleanup: Remove any items with parse errors or invalid geometry
     // This handles migrations and format changes
+    /*
     const itemsToClean = this.syncQueue.filter(
       item => (
         (item.error?.includes('invalid geometry') || 
@@ -88,6 +90,7 @@ class SyncServiceClass {
         await this.removeFromQueue(item.queueId);
       }
     }
+    */
     
     this.isInitialized = true;
 

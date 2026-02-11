@@ -19,6 +19,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import { BasemapLayout } from '@/layouts/BasemapLayout';
 import { SyncService } from '@/services/SyncService';
 import { ActiveTripData, TripService } from '@/services/TripService';
@@ -31,8 +32,8 @@ import {
     StyleSheet,
     TouchableOpacity,
     View,
-    useColorScheme,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function ActiveTripScreen() {
   const router = useRouter();
@@ -46,6 +47,7 @@ export default function ActiveTripScreen() {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const errorColor = colors.error;
+  const insets = useSafeAreaInsets();
 
   // Trip state
   const [tripData, setTripData] = useState<ActiveTripData | null>(null);
@@ -403,7 +405,7 @@ export default function ActiveTripScreen() {
 
   // Render trip stats card in body slot
   const renderBody = () => (
-    <View style={styles.bodyContainer}>
+    <View style={[styles.bodyContainer, { paddingTop: insets.top + 16 }]}>
       <ThemedView style={[styles.statsCard, { backgroundColor: colors.background }]}>
         {/* Mode */}
         <View style={styles.modeContainer}>
@@ -506,8 +508,8 @@ const styles = StyleSheet.create({
   bodyContainer: {
     flex: 1,
     justifyContent: 'flex-start',
-    paddingTop: Platform.OS === 'ios' ? 60 : 16,
     paddingHorizontal: 16,
+    // paddingTop applied dynamically with safe area insets
   },
   loadingContainer: {
     flex: 1,

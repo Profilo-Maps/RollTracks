@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
 import { Trip } from '@/adapters/DatabaseAdapter';
-import { MapViewComponentRef, Polyline } from '@/components/MapViewComponent';
+import { MapViewComponentRef, PolygonOutline, Polyline } from '@/components/MapViewComponent';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { TripHistoryCard } from '@/components/TripHistoryCard';
@@ -63,7 +63,27 @@ export default function TripSummaryScreen() {
           setTrip(cachedTrip.trip);
 
           // Decode polyline string to coordinates
+          console.log('[TripSummaryScreen] Cached trip geometry:', {
+            hasGeometry: !!cachedTrip.trip.geometry,
+            geometryType: typeof cachedTrip.trip.geometry,
+            geometryLength: cachedTrip.trip.geometry?.length,
+            geometrySample: cachedTrip.trip.geometry?.substring(0, 50),
+          });
+          
           const coordinates = HistoryService.decodePolyline(cachedTrip.trip.geometry);
+          
+          console.log('[TripSummaryScreen] Decoded cached coordinates:', {
+            count: coordinates.length,
+            first: coordinates[0],
+            last: coordinates[coordinates.length - 1],
+          });
+          
+          if (coordinates.length < 2) {
+            console.warn('[TripSummaryScreen] Insufficient cached coordinates for polyline (need at least 2, got ' + coordinates.length + ')');
+            setError('This trip has insufficient GPS data to display a route.');
+            setIsLoading(false);
+            return;
+          }
           
           if (coordinates.length > 0) {
             const tripPolyline: Polyline = {
@@ -73,6 +93,9 @@ export default function TripSummaryScreen() {
               width: 5,
             };
             setPolyline(tripPolyline);
+            console.log('[TripSummaryScreen] Cached polyline set successfully');
+          } else {
+            console.warn('[TripSummaryScreen] No coordinates decoded from cached geometry');
           }
           
           setIsLoading(false);
@@ -97,7 +120,27 @@ export default function TripSummaryScreen() {
         setTrip(tripData);
 
         // Decode polyline string to coordinates
+        console.log('[TripSummaryScreen] Trip geometry:', {
+          hasGeometry: !!tripData.geometry,
+          geometryType: typeof tripData.geometry,
+          geometryLength: tripData.geometry?.length,
+          geometrySample: tripData.geometry?.substring(0, 50),
+        });
+        
         const coordinates = HistoryService.decodePolyline(tripData.geometry);
+        
+        console.log('[TripSummaryScreen] Decoded coordinates:', {
+          count: coordinates.length,
+          first: coordinates[0],
+          last: coordinates[coordinates.length - 1],
+        });
+        
+        if (coordinates.length < 2) {
+          console.warn('[TripSummaryScreen] Insufficient coordinates for polyline (need at least 2, got ' + coordinates.length + ')');
+          setError('This trip has insufficient GPS data to display a route.');
+          setIsLoading(false);
+          return;
+        }
         
         if (coordinates.length > 0) {
           const tripPolyline: Polyline = {
@@ -107,32 +150,58 @@ export default function TripSummaryScreen() {
             width: 5,
           };
           setPolyline(tripPolyline);
+          console.log('[TripSummaryScreen] Polyline set successfully');
+        } else {
+          console.warn('[TripSummaryScreen] No coordinates decoded from geometry');
         }
 
         // Convert block polygons to outlines for map display
+        console.log('[TripSummaryScreen] Block polygon data:', {
+          hasOdBlockPolygons: !!tripData.odBlockPolygons,
+          odBlockPolygonsLength: tripData.odBlockPolygons?.length,
+          hasOdGeoids: !!tripData.odGeoids,
+          odGeoids: tripData.odGeoids,
+        });
+        
         if (tripData.odBlockPolygons) {
           const [originPolygon, destPolygon] = tripData.odBlockPolygons;
           const outlines: PolygonOutline[] = [];
 
+          console.log('[TripSummaryScreen] Processing block polygons:', {
+            hasOrigin: !!originPolygon,
+            hasDest: !!destPolygon,
+            originCoords: originPolygon?.coordinates?.length,
+            destCoords: destPolygon?.coordinates?.length,
+          });
+
           if (originPolygon) {
             outlines.push({
               id: `origin-${tripData.tripId}`,
-              coordinates: originPolygon.coordinates,
+              coordinates: originPolygon.coordinates as [number, number][][],
               color: '#FF6B6B', // Red for origin
-              width: 2,
+              width: 4,
             });
+            console.log('[TripSummaryScreen] Added origin polygon outline');
           }
 
           if (destPolygon) {
             outlines.push({
               id: `dest-${tripData.tripId}`,
-              coordinates: destPolygon.coordinates,
+              coordinates: destPolygon.coordinates as [number, number][][],
               color: '#4ECDC4', // Teal for destination
-              width: 2,
+              width: 4,
             });
+            console.log('[TripSummaryScreen] Added destination polygon outline');
           }
 
-          setBlockOutlines(outlines);
+          if (outlines.length > 0) {
+            setBlockOutlines(outlines);
+            console.log('[TripSummaryScreen] Set ' + outlines.length + ' block outlines');
+          } else {
+            console.warn('[TripSummaryScreen] No valid block polygons to display');
+          }
+        } else {
+          console.log('[TripSummaryScreen] No odBlockPolygons data available');
         }
       } catch (err) {
         console.error('[TripSummaryScreen] Failed to load trip data:', err);
@@ -207,11 +276,6 @@ export default function TripSummaryScreen() {
     }
   };
 
-  // Handle trip card press (no-op for trip summary screen)
-  const handleTripCardPress = () => {
-    // Already on trip summary, do nothing
-  };
-
   // Render header with back button
   const renderHeader = () => (
     <View style={styles.headerContainer}>
@@ -229,6 +293,11 @@ export default function TripSummaryScreen() {
       </Pressable>
     </View>
   );
+
+  // Handle trip card press (no-op for trip summary screen)
+  const handleTripCardPress = () => {
+    // Already on trip summary, do nothing
+  };
 
   // Render footer with trip history card in drawer format
   const renderFooter = () => {
