@@ -120,12 +120,25 @@ export default function HomeScreen() {
         setTrips(completedTrips);
 
         // Convert trips to polylines for MapView
-        const tripPolylines: Polyline[] = completedTrips.map((trip) => ({
-          id: trip.tripId,
-          coordinates: trip.geometry.coordinates as [number, number][],
-          color: getModeColor(trip.mode),
-          width: 4,
-        }));
+        const tripPolylines: Polyline[] = completedTrips
+          .map((trip) => {
+            // Decode polyline string to coordinates
+            const coordinates = HistoryService.decodePolyline(trip.geometry);
+            
+            if (coordinates.length === 0) {
+              console.warn('[HomeScreen] Failed to decode polyline for trip:', trip.tripId);
+              return null;
+            }
+            
+            return {
+              id: trip.tripId,
+              coordinates,
+              color: getModeColor(trip.mode),
+              width: 4,
+            };
+          })
+          .filter((polyline): polyline is Polyline => polyline !== null);
+        
         setPolylines(tripPolylines);
 
         // Clear features (DataRanger functionality removed)

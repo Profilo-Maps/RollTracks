@@ -1,5 +1,8 @@
+import * as polyline from '@mapbox/polyline';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 import { Trip } from '../adapters/DatabaseAdapter';
 import { GPSCoordinate, NativeAdapter, NativeAdapterError } from '../adapters/NativeAdapter';
 import { SyncService } from './SyncService';
@@ -15,6 +18,7 @@ import { SyncService } from './SyncService';
 // --- Constants ---
 
 const STORAGE_KEY_ACTIVE_TRIP = '@rolltracks/active_trip';
+const STORAGE_KEY_GPS_POINTS = '@rolltracks/gps_points'; // Backup GPS points during active trip
 const ORPHANED_TRIP_DISTANCE_THRESHOLD_METERS = 200;
 
 // --- Types ---
@@ -327,8 +331,8 @@ class TripServiceClass {
 
   /**
    * End the current trip.
-   * Stops GPS tracking, calculates duration/distance, saves to database via Sync Service,
-   * and clears active trip state.
+   * Stops GPS tracking, calculates duration/distance, encodes polyline,
+   * saves to database via Sync Service, and clears active trip state.
    *
    * @param reachedDest - Whether the user reported reaching their intended destination
    * @returns Summary of the completed trip
@@ -343,6 +347,11 @@ class TripServiceClass {
 
     const { metadata, coordinates, relativeTimes } = this.activeTripData;
 
+    // Ensure we have a valid tripId
+    if (!metadata.tripId) {
+      throw new Error('Trip ID is missing. Cannot save trip.');
+    }
+
     // Calculate duration from relative times (last recorded time)
     const durationS = relativeTimes.length > 0
       ? relativeTimes[relativeTimes.length - 1]
@@ -351,14 +360,16 @@ class TripServiceClass {
     // Calculate distance in miles
     const distanceMi = this.calculateTotalDistance(coordinates);
 
-    // Create GeoJSON LineString geometry with relative timestamps
-    const geometry: GeoJSON.LineString & { properties?: { times: number[] } } = {
-      type: 'LineString',
-      coordinates,
-      properties: {
-        times: relativeTimes, // Relative time in seconds for each coordinate
-      },
-    };
+    // Encode polyline from coordinates
+    // Convert [lon, lat] to [lat, lon] for polyline encoding
+    const latLngCoordinates = coordinates.map(([lon, lat]) => [lat, lon]);
+    const encodedPolyline = polyline.encode(latLngCoordinates);
+
+    console.log('[TripService] Encoded polyline:', {
+      coordinateCount: coordinates.length,
+      polylineLength: encodedPolyline.length,
+      sample: encodedPolyline.substring(0, 50) + '...',
+    });
 
     // Prepare trip data for database
     // Pass startTime for binning (DatabaseAdapter will bin it into timeOfDay and weekday)
@@ -372,7 +383,8 @@ class TripServiceClass {
       distanceMi,
       status: 'completed',
       reachedDest,
-      geometry,
+      geometry: encodedPolyline, // Store encoded polyline string
+      relativeTimes, // Store relative timestamps for speed analysis
       devicePlatform: metadata.devicePlatform,
       deviceOsVersion: metadata.deviceOsVersion,
       appVersion: metadata.appVersion,

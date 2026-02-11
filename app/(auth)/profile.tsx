@@ -258,7 +258,7 @@ export default function ProfileScreen() {
               styles.toggle,
               { backgroundColor: user?.dataRangerMode ? tintColor : '#ccc' }
             ]}>
-              <ThemedText style={styles.toggleText}>
+              <ThemedText style={[styles.toggleText, { color: buttonTextColor }]}>
                 {user?.dataRangerMode ? 'ON' : 'OFF'}
               </ThemedText>
             </View>
@@ -394,7 +394,7 @@ const styles = StyleSheet.create({
   toggleText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#fff',
+    // Color applied dynamically via buttonTextColor
   },
   button: {
     paddingVertical: 14,

@@ -62,14 +62,19 @@ export default function TripSummaryScreen() {
           console.log('[TripSummaryScreen] Using cached raw GPS data for unsynced trip');
           setTrip(cachedTrip.trip);
 
-          // Convert trip to polyline for map display
-          const tripPolyline: Polyline = {
-            id: cachedTrip.trip.tripId,
-            coordinates: cachedTrip.trip.geometry.coordinates as [number, number][],
-            color: getModeColor(cachedTrip.trip.mode),
-            width: 5,
-          };
-          setPolyline(tripPolyline);
+          // Decode polyline string to coordinates
+          const coordinates = HistoryService.decodePolyline(cachedTrip.trip.geometry);
+          
+          if (coordinates.length > 0) {
+            const tripPolyline: Polyline = {
+              id: cachedTrip.trip.tripId,
+              coordinates,
+              color: getModeColor(cachedTrip.trip.mode),
+              width: 5,
+            };
+            setPolyline(tripPolyline);
+          }
+          
           setIsLoading(false);
           return;
         }
@@ -91,14 +96,18 @@ export default function TripSummaryScreen() {
 
         setTrip(tripData);
 
-        // Convert trip to polyline for map display
-        const tripPolyline: Polyline = {
-          id: tripData.tripId,
-          coordinates: tripData.geometry.coordinates as [number, number][],
-          color: getModeColor(tripData.mode),
-          width: 5,
-        };
-        setPolyline(tripPolyline);
+        // Decode polyline string to coordinates
+        const coordinates = HistoryService.decodePolyline(tripData.geometry);
+        
+        if (coordinates.length > 0) {
+          const tripPolyline: Polyline = {
+            id: tripData.tripId,
+            coordinates,
+            color: getModeColor(tripData.mode),
+            width: 5,
+          };
+          setPolyline(tripPolyline);
+        }
 
         // Convert block polygons to outlines for map display
         if (tripData.odBlockPolygons) {

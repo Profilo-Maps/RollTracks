@@ -35,6 +35,7 @@ export function TripHistoryCard({
   const backgroundColor = useThemeColor({}, 'background');
   const tintColor = useThemeColor({}, 'tint');
   const iconColor = useThemeColor({}, 'icon');
+  const buttonTextColor = useThemeColor({}, 'buttonText');
 
   // Format time of day bin to readable text
   const formatTimeOfDay = (timeOfDay: string): string => {
@@ -114,7 +115,7 @@ export function TripHistoryCard({
       <View style={styles.header}>
         <View style={styles.modeContainer}>
           <View style={[styles.modeIcon, { backgroundColor: getModeColor(trip.mode) }]}>
-            <Ionicons name={getModeIcon(trip.mode)} size={20} color="#fff" />
+            <Ionicons name={getModeIcon(trip.mode)} size={20} color={buttonTextColor} />
           </View>
           <View style={styles.headerText}>
             <ThemedText type="defaultSemiBold" style={styles.mode}>

@@ -45,6 +45,7 @@ export default function ActiveTripScreen() {
   const mapRef = useRef<MapViewComponentRef>(null);
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
+  const errorColor = colors.error;
 
   // Trip state
   const [tripData, setTripData] = useState<ActiveTripData | null>(null);
@@ -54,7 +55,7 @@ export default function ActiveTripScreen() {
   const [currentPolyline, setCurrentPolyline] = useState<Polyline>({
     id: 'active-trip',
     coordinates: [],
-    color: '#FF3B30', // Red for active trip
+    color: '#007AFF', // Blue for active trip
     width: 5,
   });
   const [isLoading, setIsLoading] = useState(true);
@@ -140,17 +141,6 @@ export default function ActiveTripScreen() {
       if (currentTrip) {
         setTripData(currentTrip);
 
-        // Update polyline
-        if (currentTrip.coordinates.length > 0) {
-          console.log('[ActiveTripScreen] Updating polyline with', currentTrip.coordinates.length, 'points');
-          setCurrentPolyline({
-            id: 'active-trip',
-            coordinates: currentTrip.coordinates, // Already in [lon, lat] format
-            color: currentTrip.metadata.status === 'paused' ? '#FFA500' : '#FF3B30',
-            width: 5,
-          });
-        }
-
         // Calculate duration
         const startTime = new Date(currentTrip.metadata.startTime).getTime();
         const now = Date.now();
@@ -173,6 +163,17 @@ export default function ActiveTripScreen() {
             lastCoordinateCount = currentTrip.coordinates.length;
           }
           setDistance(cachedDistance / 1609.34); // Convert to miles
+        }
+
+        // Update polyline
+        if (currentTrip.coordinates.length > 0) {
+          console.log('[ActiveTripScreen] Updating polyline with', currentTrip.coordinates.length, 'points');
+          setCurrentPolyline({
+            id: 'active-trip',
+            coordinates: currentTrip.coordinates, // Already in [lon, lat] format
+            color: currentTrip.metadata.status === 'paused' ? '#FFA500' : '#007AFF',
+            width: 5,
+          });
         }
       }
     }, 1000); // Update every second
@@ -203,8 +204,8 @@ export default function ActiveTripScreen() {
     // Get initial position
     updateUserLocation();
 
-    // Update position every 5 seconds (more frequent for active trip)
-    const intervalId = setInterval(updateUserLocation, 5000);
+    // Update position every 1 second (synced with polyline updates)
+    const intervalId = setInterval(updateUserLocation, 1000);
 
     return () => {
       isSubscribed = false;
@@ -302,6 +303,15 @@ export default function ActiveTripScreen() {
       const summary = await TripService.endTrip(result.reachedDest);
       console.log('[ActiveTripScreen] Trip ended:', summary);
 
+      // Validate tripId before navigation
+      if (!summary.tripId) {
+        Alert.alert(
+          'Error',
+          'Failed to save trip. Please check your connection and try again.'
+        );
+        return;
+      }
+
       // Check sync status
       const syncStatus = SyncService.getSyncStatus();
       if (syncStatus.isPending) {
@@ -382,7 +392,7 @@ export default function ActiveTripScreen() {
         zoomLevel={16}
         body={
           <View style={styles.loadingContainer}>
-            <ThemedText style={styles.errorText}>
+            <ThemedText style={[styles.errorText, { color: errorColor }]}>
               {error || 'No trip data available'}
             </ThemedText>
           </View>
@@ -395,31 +405,19 @@ export default function ActiveTripScreen() {
   const renderBody = () => (
     <View style={styles.bodyContainer}>
       <ThemedView style={[styles.statsCard, { backgroundColor: colors.background }]}>
-        {/* Mode and Status */}
-        <View style={styles.statusRow}>
-          <View style={styles.modeContainer}>
-            <Ionicons
-              name={getModeIcon(tripData.metadata.mode)}
-              size={24}
-              color={colors.tint}
-            />
-            <ThemedText style={styles.modeText}>
-              {tripData.metadata.mode.charAt(0).toUpperCase() + tripData.metadata.mode.slice(1)}
-            </ThemedText>
-          </View>
-          <View
-            style={[
-              styles.statusBadge,
-              { backgroundColor: isPaused ? colors.icon : '#4CAF50' },
-            ]}
-          >
-            <ThemedText style={[styles.statusText, { color: colors.buttonText }]}>
-              {isPaused ? 'PAUSED' : 'RECORDING'}
-            </ThemedText>
-          </View>
+        {/* Mode */}
+        <View style={styles.modeContainer}>
+          <Ionicons
+            name={getModeIcon(tripData.metadata.mode)}
+            size={24}
+            color={colors.tint}
+          />
+          <ThemedText style={styles.modeText}>
+            {tripData.metadata.mode.charAt(0).toUpperCase() + tripData.metadata.mode.slice(1)}
+          </ThemedText>
         </View>
 
-        {/* Trip Stats */}
+        {/* Trip Stats - Duration and Distance Only */}
         <View style={styles.statsGrid}>
           <View style={styles.statItem}>
             <Ionicons name="time-outline" size={20} color={colors.icon} />
@@ -434,25 +432,7 @@ export default function ActiveTripScreen() {
             <ThemedText style={styles.statLabel}>Distance</ThemedText>
             <ThemedText style={styles.statValue}>{formatDistance(distance)}</ThemedText>
           </View>
-
-          <View style={styles.statDivider} />
-
-          <View style={styles.statItem}>
-            <Ionicons name="happy-outline" size={20} color={colors.icon} />
-            <ThemedText style={styles.statLabel}>Comfort</ThemedText>
-            <ThemedText style={styles.statValue}>{tripData.metadata.comfort}/10</ThemedText>
-          </View>
         </View>
-
-        {/* Trip Purpose */}
-        {tripData.metadata.purpose && (
-          <View style={styles.purposeContainer}>
-            <ThemedText style={[styles.purposeLabel, { color: colors.icon }]}>
-              Purpose:
-            </ThemedText>
-            <ThemedText style={styles.purposeText}>{tripData.metadata.purpose}</ThemedText>
-          </View>
-        )}
       </ThemedView>
     </View>
   );
@@ -539,7 +519,7 @@ const styles = StyleSheet.create({
   },
   errorText: {
     fontSize: 16,
-    color: '#FF3B30',
+    // color applied dynamically
   },
   statsCard: {
     borderRadius: 16,
@@ -551,36 +531,21 @@ const styles = StyleSheet.create({
     elevation: 8,
     opacity: 0.97,
   },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
   modeContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
+    marginBottom: 20,
   },
   modeText: {
     fontSize: 18,
     fontWeight: '600',
   },
-  statusBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
   statsGrid: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
   },
   statItem: {
     flex: 1,
@@ -590,30 +555,15 @@ const styles = StyleSheet.create({
   statDivider: {
     width: 1,
     height: 60,
-    backgroundColor: 'rgba(0, 0, 0, 0.1)',
+    backgroundColor: 'rgba(128, 128, 128, 0.3)',
   },
   statLabel: {
     fontSize: 12,
-    opacity: 0.7,
+    fontWeight: '500',
   },
   statValue: {
     fontSize: 18,
     fontWeight: '700',
-  },
-  purposeContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(0, 0, 0, 0.1)',
-  },
-  purposeLabel: {
-    fontSize: 14,
-  },
-  purposeText: {
-    fontSize: 14,
-    fontWeight: '600',
   },
   footerContainer: {
     flexDirection: 'row',
@@ -622,7 +572,7 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === 'ios' ? 32 : 16,
     gap: 12,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(0, 0, 0, 0.1)',
+    borderTopColor: 'rgba(128, 128, 128, 0.3)',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.1,

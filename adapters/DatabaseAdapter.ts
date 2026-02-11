@@ -83,7 +83,8 @@ export interface Trip {
   distanceMi?: number;
   status: 'active' | 'paused' | 'completed';
   reachedDest?: boolean; // Whether user reported reaching their destination
-  geometry: GeoJSON.LineString; // Coordinates with relative timestamps in properties.times
+  geometry: string; // Encoded polyline string (Mapbox Polyline format)
+  relativeTimes?: number[]; // Relative timestamps (seconds from trip start) for each coordinate - enables speed analysis
   odGeoids?: [string, string] | null; // [origin_geoid, destination_geoid] for clipped blocks
   odBlockPolygons?: [GeoJSON.Polygon, GeoJSON.Polygon] | null; // Block geometries for display
   featuresRated?: number; // DataRanger mode: count of rated features
@@ -684,6 +685,11 @@ async function _deleteAllUserData(userId: string): Promise<void> {
  * Accepts a startTime parameter for binning purposes (not stored).
  * Bins the startTime into timeOfDay and weekday before storage.
  */
+/**
+ * Insert a new trip into the database.
+ * Bins the startTime into timeOfDay and weekday before storage.
+ * Geometry is stored as an encoded polyline string.
+ */
 async function _insertTrip(
   tripData: Omit<Trip, 'tripId' | 'timeOfDay' | 'weekday'> & { startTime: string }
 ): Promise<Trip> {
@@ -704,7 +710,8 @@ async function _insertTrip(
       distance_mi: tripData.distanceMi,
       status: tripData.status,
       reached_dest: tripData.reachedDest ?? null,
-      geometry: tripData.geometry,
+      geometry: tripData.geometry, // Store as encoded polyline string
+      relative_times: tripData.relativeTimes ?? null,
       device_platform: tripData.devicePlatform,
       device_os_version: tripData.deviceOsVersion,
       app_version: tripData.appVersion,
@@ -728,7 +735,8 @@ async function _insertTrip(
     distanceMi: data.distance_mi,
     status: data.status,
     reachedDest: data.reached_dest,
-    geometry: data.geometry,
+    geometry: data.geometry, // Return as string
+    relativeTimes: data.relative_times,
     devicePlatform: data.device_platform,
     deviceOsVersion: data.device_os_version,
     appVersion: data.app_version,
@@ -838,6 +846,7 @@ async function _getTrip(tripId: string): Promise<Trip | null> {
     status: data.status,
     reachedDest: data.reached_dest,
     geometry: data.geometry,
+    relativeTimes: data.relative_times,
     odGeoids: data.od_geoids,
     odBlockPolygons,
     devicePlatform: data.device_platform,
@@ -875,6 +884,7 @@ async function _getUserTrips(userId: string): Promise<Trip[]> {
         status: row.status,
         reachedDest: row.reached_dest,
         geometry: row.geometry,
+        relativeTimes: row.relative_times,
         odGeoids: row.od_geoids,
         odBlockPolygons,
         devicePlatform: row.device_platform,

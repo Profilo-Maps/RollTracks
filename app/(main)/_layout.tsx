@@ -2,8 +2,8 @@ import { Slot } from 'expo-router';
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { MapViewComponent } from '@/components/MapViewComponent';
-import { MapProvider, useMap } from '@/contexts/MapContext';
+import { Colors } from '@/constants/theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 
 /**
  * Basemap Layout
@@ -11,53 +11,50 @@ import { MapProvider, useMap } from '@/contexts/MapContext';
  *
  * Structure:
  * - Map View Component: Full screen background layer (persistent across screens)
- * - Screen Content Overlay: Screens render via Slot and contribute data to shared map
+ * - Header Slot: Top of screen (transparent by default)
+ * - Body Slot: Screen-specific content that overlays the map
+ * - Secondary Footer Slot: Above the footer (for recenter button, etc.)
+ * - Footer Slot: Bottom of screen (for Bottom Navigation Bar)
  *
- * The MapView instance persists across navigation, preventing tile reloading.
- * Screens use the useMap() hook to update map data (polylines, features, position, etc.)
+ * All slots are transparent by default, allowing the map to show through
+ * unless a screen adds opaque content.
  */
-function BasemapLayoutContent() {
-  const {
-    polylines,
-    polygonOutlines,
-    features,
-    userPosition,
-    centerPosition,
-    zoomLevel,
-    mapStyle,
-    gpsError,
-  } = useMap();
+export default function BasemapLayout() {
+  const colorScheme = useColorScheme();
 
   return (
     <View style={styles.container}>
       {/* Map View Component - Persistent Background Layer */}
-      <View style={styles.mapContainer}>
-        <MapViewComponent
-          polylines={polylines}
-          polygonOutlines={polygonOutlines}
-          features={features}
-          userPosition={userPosition}
-          centerPosition={centerPosition}
-          zoomLevel={zoomLevel}
-          mapStyle={mapStyle}
-          gpsError={gpsError}
-          showUserLocation={true}
-        />
+      {/* TODO: Replace with MapViewComponent once MapBox Adapter is implemented */}
+      <View
+        style={[
+          styles.mapContainer,
+          { backgroundColor: Colors[colorScheme ?? 'light'].background },
+        ]}
+      >
+        {/* Placeholder for MapViewComponent */}
+        <View style={[styles.mapPlaceholder, { backgroundColor: Colors[colorScheme ?? 'light'].icon + '20' }]} />
       </View>
 
       {/* Screen Content Overlay */}
       <View style={styles.overlay}>
-        <Slot />
+        {/* Header Slot - screens can add header content */}
+        <View style={styles.headerSlot} />
+
+        {/* Body Slot - screen-specific content via Slot */}
+        <View style={styles.bodySlot}>
+          <Slot />
+        </View>
+
+        {/* Secondary Footer Slot - for recenter button, end correction button, etc. */}
+        <View style={styles.secondaryFooterSlot} />
+
+        {/* Footer Slot - for Bottom Navigation Bar */}
+        <View style={styles.footerSlot}>
+          {/* TODO: Add BottomNavigationBarComponent here */}
+        </View>
       </View>
     </View>
-  );
-}
-
-export default function BasemapLayout() {
-  return (
-    <MapProvider>
-      <BasemapLayoutContent />
-    </MapProvider>
   );
 }
 
@@ -68,8 +65,30 @@ const styles = StyleSheet.create({
   mapContainer: {
     ...StyleSheet.absoluteFillObject,
   },
+  mapPlaceholder: {
+    flex: 1,
+    // backgroundColor applied dynamically
+  },
   overlay: {
     flex: 1,
-    pointerEvents: 'box-none', // Allow touches to pass through to map
+  },
+  headerSlot: {
+    // Transparent header area - screens can add content
+    paddingTop: 0, // No padding - screens handle their own safe area
+    paddingHorizontal: 0,
+  },
+  bodySlot: {
+    flex: 1,
+    // Transparent by default - screen content overlays map
+  },
+  secondaryFooterSlot: {
+    // Above the footer - for floating buttons like recenter
+    paddingHorizontal: 0,
+    paddingBottom: 0,
+  },
+  footerSlot: {
+    // Bottom navigation bar area
+    paddingBottom: 0, // No padding - BottomNavigationBarComponent handles safe area
+    paddingHorizontal: 0,
   },
 });

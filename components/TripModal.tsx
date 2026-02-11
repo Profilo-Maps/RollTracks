@@ -229,7 +229,10 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
       <View style={styles.overlay}>
         <View style={[styles.modalContainer, { backgroundColor: colors.background }]}>
           {/* Header */}
-          <View style={styles.header}>
+          <View style={[
+            styles.header,
+            { borderBottomColor: colorScheme === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)' }
+          ]}>
             <ThemedText style={styles.title}>
               {postTripMode
                 ? 'Trip Complete'
@@ -303,7 +306,10 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
                 </View>
               </ScrollView>
 
-              <View style={styles.footer}>
+              <View style={[
+                styles.footer,
+                { borderTopColor: colorScheme === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)' }
+              ]}>
                 <TouchableOpacity
                   style={[
                     styles.startButton,
@@ -336,8 +342,14 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
             <>
               <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
                 <View style={styles.section}>
-                  <View style={[styles.warningBanner, { backgroundColor: colors.tint + '20', borderColor: colors.tint }]}>
-                    <ThemedText style={[styles.warningIcon, { color: colors.tint }]}>⚠️</ThemedText>
+                  <View style={[
+                    styles.warningBanner,
+                    {
+                      backgroundColor: colorScheme === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(10, 126, 164, 0.1)',
+                      borderColor: colorScheme === 'dark' ? colors.icon : colors.tint
+                    }
+                  ]}>
+                    <ThemedText style={styles.warningIcon}>⚠️</ThemedText>
                     <View style={styles.warningContent}>
                       <ThemedText style={styles.warningTitle}>
                         {orphanedTrip.status === 'paused' ? 'Paused Trip Found' : 'Active Trip Found'}
@@ -351,28 +363,43 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
 
                 <View style={styles.section}>
                   <ThemedText style={styles.label}>Trip Details</ThemedText>
-                  <View style={styles.tripDetails}>
-                    <View style={styles.detailRow}>
+                  <View style={[
+                    styles.tripDetails,
+                    { backgroundColor: colorScheme === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)' }
+                  ]}>
+                    <View style={[
+                      styles.detailRow,
+                      { borderBottomColor: colorScheme === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)' }
+                    ]}>
                       <ThemedText style={styles.detailLabel}>Mode:</ThemedText>
                       <ThemedText style={styles.detailValue}>
                         {orphanedTrip.tripData.metadata.mode.charAt(0).toUpperCase() +
                          orphanedTrip.tripData.metadata.mode.slice(1)}
                       </ThemedText>
                     </View>
-                    <View style={styles.detailRow}>
+                    <View style={[
+                      styles.detailRow,
+                      { borderBottomColor: colorScheme === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)' }
+                    ]}>
                       <ThemedText style={styles.detailLabel}>Distance:</ThemedText>
                       <ThemedText style={styles.detailValue}>
                         {calculateDistance(orphanedTrip.tripData.coordinates)} miles
                       </ThemedText>
                     </View>
-                    <View style={styles.detailRow}>
+                    <View style={[
+                      styles.detailRow,
+                      { borderBottomColor: colorScheme === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)' }
+                    ]}>
                       <ThemedText style={styles.detailLabel}>Purpose:</ThemedText>
                       <ThemedText style={styles.detailValue}>
                         {orphanedTrip.tripData.metadata.purpose}
                       </ThemedText>
                     </View>
                     {orphanedTrip.distanceFromLastPoint !== null && (
-                      <View style={styles.detailRow}>
+                      <View style={[
+                        styles.detailRow,
+                        { borderBottomColor: colorScheme === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)' }
+                      ]}>
                         <ThemedText style={styles.detailLabel}>Distance from last point:</ThemedText>
                         <ThemedText style={styles.detailValue}>
                           {orphanedTrip.distanceFromLastPoint.toFixed(0)}m
@@ -392,7 +419,10 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
               </ScrollView>
 
               {/* Orphaned Trip Actions */}
-              <View style={styles.footer}>
+              <View style={[
+                styles.footer,
+                { borderTopColor: colorScheme === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)' }
+              ]}>
                 <TouchableOpacity
                   style={[
                     styles.actionButton,
@@ -416,7 +446,11 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
                   style={[
                     styles.actionButton,
                     styles.endButton,
-                    { backgroundColor: colors.background, borderColor: colors.icon, borderWidth: 2 }
+                    {
+                      backgroundColor: 'transparent',
+                      borderColor: colors.text,
+                      borderWidth: 2
+                    }
                   ]}
                   onPress={handleEndOrphanedTrip}
                   disabled={isProcessing}
@@ -549,7 +583,10 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
               </ScrollView>
 
               {/* Footer with Start Button */}
-              <View style={styles.footer}>
+              <View style={[
+                styles.footer,
+                { borderTopColor: colorScheme === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)' }
+              ]}>
                 <TouchableOpacity
                   style={[
                     styles.startButton,
@@ -727,7 +764,7 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 16,
     fontSize: 14,
-    opacity: 0.7,
+    fontWeight: '500',
   },
   warningBanner: {
     flexDirection: 'row',
@@ -750,10 +787,9 @@ const styles = StyleSheet.create({
   },
   warningDescription: {
     fontSize: 14,
-    opacity: 0.8,
+    fontWeight: '500',
   },
   tripDetails: {
-    backgroundColor: 'rgba(0, 0, 0, 0.05)',
     borderRadius: 12,
     padding: 16,
   },
@@ -762,11 +798,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0, 0, 0, 0.05)',
   },
   detailLabel: {
     fontSize: 14,
-    opacity: 0.7,
+    fontWeight: '500',
   },
   detailValue: {
     fontSize: 14,

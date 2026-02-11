@@ -13,5 +13,6 @@
   "search.exclude": {
     "**/node_modules": true,
     "**/android/build": true
-  }
+  },
+  "typescript.autoClosingTags": false
 }
