@@ -1,4 +1,5 @@
 import { MapBoxAdapter, MapStyles } from '@/adapters/MapBoxAdapter';
+import { useThemeColor } from '@/hooks/use-theme-color';
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 
@@ -227,19 +228,7 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
           animationDuration={1000}
         />
 
-        {/* User location indicator - rendered FIRST so it appears on top of polylines */}
-        {showUserLocation && userPosition && (
-          <MapboxGL.PointAnnotation
-            id="user-location"
-            coordinate={userPosition}
-          >
-            <View style={styles.userLocationMarker}>
-              <View style={[styles.userLocationDot, { backgroundColor: tintColor, borderColor: backgroundColor }]} />
-            </View>
-          </MapboxGL.PointAnnotation>
-        )}
-
-        {/* Render polylines (trip routes) - render AFTER user location */}
+        {/* Render polylines (trip routes) - render FIRST so they appear below user location */}
         {polylines.map((polyline) => (
           <MapboxGL.ShapeSource
             key={`polyline-${polyline.id}`}
@@ -264,6 +253,18 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
             />
           </MapboxGL.ShapeSource>
         ))}
+
+        {/* User location indicator - rendered LAST so it appears on top of polylines */}
+        {showUserLocation && userPosition && (
+          <MapboxGL.PointAnnotation
+            id="user-location"
+            coordinate={userPosition}
+          >
+            <View style={styles.userLocationMarker}>
+              <View style={[styles.userLocationDot, { backgroundColor: tintColor, borderColor: backgroundColor }]} />
+            </View>
+          </MapboxGL.PointAnnotation>
+        )}
 
         {/* Render polygon outlines (census blocks) */}
         {polygonOutlines.map((polygon) => (

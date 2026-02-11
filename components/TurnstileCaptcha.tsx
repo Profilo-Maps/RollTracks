@@ -1,6 +1,8 @@
 import React, { useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { WebView } from 'react-native-webview';
+
+import { useColorScheme } from '@/hooks/use-color-scheme';
 
 interface TurnstileCaptchaProps {
   siteKey: string;

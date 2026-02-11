@@ -11,18 +11,16 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { BasemapLayout } from '@/layouts/BasemapLayout';
 import { HistoryService } from '@/services/HistoryService';
 import { TripService } from '@/services/TripService';
 
 /**
  * Trip History Screen
- * Built with Basemap Layout.
+ * Displays a list of completed trips with themed background.
  *
  * Features:
- * - List of Trip Summary Cards in body slot
- * - Profile button in right of header slot (launches Profile Screen)
- * - Map View Component is frozen and dimmed
+ * - List of Trip Summary Cards
+ * - Profile button in header (launches Profile Screen)
  * - Empty state for new users with no trips
  * - Checks for orphaned trips on mount and prompts user
  */
@@ -206,41 +204,36 @@ export default function TripHistoryScreen() {
 
   // Render body based on state
   const renderBody = () => (
-    <View style={styles.bodyContainer}>
-      {/* Semi-opaque background to dim the map */}
-      <View style={styles.dimmedOverlay} />
-
-      <ScrollView
-        style={styles.scrollContainer}
-        contentContainerStyle={[
-          styles.scrollContent,
-          (isLoading || error || trips.length === 0) && styles.scrollContentCentered,
-        ]}
-      >
-        {isLoading && renderLoading()}
-        {error && !isLoading && renderError()}
-        {!isLoading && !error && trips.length === 0 && renderEmptyState()}
-        {!isLoading && !error && trips.length > 0 && renderTripList()}
-      </ScrollView>
-    </View>
+    <ScrollView
+      style={styles.scrollContainer}
+      contentContainerStyle={[
+        styles.scrollContent,
+        (isLoading || error || trips.length === 0) && styles.scrollContentCentered,
+      ]}
+    >
+      {isLoading && renderLoading()}
+      {error && !isLoading && renderError()}
+      {!isLoading && !error && trips.length === 0 && renderEmptyState()}
+      {!isLoading && !error && trips.length > 0 && renderTripList()}
+    </ScrollView>
   );
 
   return (
-    <BasemapLayout
-      interactionState="dimmed"
-      header={renderHeader()}
-      body={renderBody()}
-      footer={
-        <BottomNavigationBarComponent
-          autoOpenModal={shouldShowOrphanedTripModal}
-          onModalVisibilityChange={handleModalVisibilityChange}
-        />
-      }
-    />
+    <ThemedView style={styles.container}>
+      {renderHeader()}
+      {renderBody()}
+      <BottomNavigationBarComponent
+        autoOpenModal={shouldShowOrphanedTripModal}
+        onModalVisibilityChange={handleModalVisibilityChange}
+      />
+    </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
   headerContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -260,13 +253,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 4,
     elevation: 5,
-  },
-  bodyContainer: {
-    flex: 1,
-  },
-  dimmedOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
   },
   scrollContainer: {
     flex: 1,
