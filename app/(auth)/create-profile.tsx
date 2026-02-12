@@ -6,6 +6,7 @@ import {
     Platform,
     ScrollView,
     StyleSheet,
+    Switch,
     TextInput,
     TouchableOpacity,
 } from 'react-native';
@@ -24,6 +25,7 @@ export default function CreateProfileScreen() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [modeList, setModeList] = useState<string[]>([]);
+  const [dataRangerMode, setDataRangerMode] = useState(false);
   const [captchaToken, setCaptchaToken] = useState<string>('');
   const [showCaptcha, setShowCaptcha] = useState(false);
   const [error, setError] = useState('');
@@ -130,6 +132,7 @@ export default function CreateProfileScreen() {
         displayName: displayName.trim(),
         age: ageNum,
         modeList,
+        dataRangerMode,
         password,
         captchaToken,
       });
@@ -234,6 +237,21 @@ export default function CreateProfileScreen() {
               selected={modeList}
               onChange={setModeList}
             />
+
+            <ThemedView style={styles.switchContainer}>
+              <ThemedView style={styles.switchLabelContainer}>
+                <ThemedText style={styles.label}>DataRanger Mode</ThemedText>
+                <ThemedText style={styles.hint}>
+                  Enable advanced features to assess and update urban infrastructure data (curb ramps, sidewalk networks). You can change this anytime from your profile.
+                </ThemedText>
+              </ThemedView>
+              <Switch
+                value={dataRangerMode}
+                onValueChange={setDataRangerMode}
+                trackColor={{ false: iconColor, true: tintColor }}
+                thumbColor="#fff"
+              />
+            </ThemedView>
 
             {showCaptcha && (
               <>
@@ -375,5 +393,16 @@ const styles = StyleSheet.create({
   link: {
     marginTop: 20,
     paddingVertical: 15,
+  },
+  switchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  switchLabelContainer: {
+    flex: 1,
+    marginRight: 12,
   },
 });

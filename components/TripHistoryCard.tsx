@@ -159,13 +159,16 @@ export function TripHistoryCard({
       </View>
 
       {/* DataRanger stats (if enabled) */}
-      {showDataRangerStats && (trip.featuresRated || trip.segmentsCorrected) && (
+      {showDataRangerStats && (
+        (trip.featuresRated !== undefined && trip.featuresRated > 0) || 
+        (trip.segmentsCorrected !== undefined && trip.segmentsCorrected > 0)
+      ) && (
         <View style={[styles.dataRangerStats, { borderTopColor: tintColor }]}>
           {trip.featuresRated !== undefined && trip.featuresRated > 0 && (
             <View style={styles.statItem}>
               <Ionicons name="star-outline" size={16} color={tintColor} style={styles.statIcon} />
               <ThemedText style={[styles.statText, { color: tintColor }]}>
-                {trip.featuresRated} rated
+                {`${trip.featuresRated} rated`}
               </ThemedText>
             </View>
           )}
@@ -174,7 +177,7 @@ export function TripHistoryCard({
             <View style={styles.statItem}>
               <Ionicons name="create-outline" size={16} color={tintColor} style={styles.statIcon} />
               <ThemedText style={[styles.statText, { color: tintColor }]}>
-                {trip.segmentsCorrected} corrected
+                {`${trip.segmentsCorrected} corrected`}
               </ThemedText>
             </View>
           )}

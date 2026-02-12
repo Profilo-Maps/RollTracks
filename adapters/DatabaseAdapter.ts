@@ -34,6 +34,7 @@ export interface IAuthService {
     age: number;
     password: string;
     modeList: string[];
+    dataRangerMode?: boolean;
     captchaToken?: string;
   }): Promise<UserProfile>;
 
@@ -393,9 +394,9 @@ async function _insertUserProfile(
   userId: string,
   profile: {
     displayName: string;
-    passwordHash: string;
     age: number;
     modeList: string[];
+    dataRangerMode?: boolean;
   },
   skipDisplayNameCheck: boolean = false,
 ): Promise<void> {
@@ -419,10 +420,9 @@ async function _insertUserProfile(
   const { error } = await supabase.from('user_profiles').insert({
     id: userId,
     display_name: profile.displayName,
-    password_hash: profile.passwordHash,
     age: profile.age,
     mode_list: profile.modeList,
-    dataranger_mode: false,
+    dataranger_mode: profile.dataRangerMode ?? false,
   });
   if (error) throw new Error(`Failed to create profile: ${error.message}`);
 }
@@ -1176,9 +1176,10 @@ export const AuthService: IAuthService = {
     age: number;
     password: string;
     modeList: string[];
+    dataRangerMode?: boolean;
     captchaToken?: string;
   }) {
-    const { username, displayName, age, password, modeList, captchaToken } = params;
+    const { username, displayName, age, password, modeList, dataRangerMode, captchaToken } = params;
     
     console.log('AuthService.register called with:', { 
       username, 
@@ -1186,7 +1187,8 @@ export const AuthService: IAuthService = {
       age, 
       passwordType: typeof password,
       passwordValue: password,
-      modeList, 
+      modeList,
+      dataRangerMode,
       captchaToken 
     });
     
@@ -1198,14 +1200,14 @@ export const AuthService: IAuthService = {
     console.log('About to hash password, type:', typeof password, 'value:', password);
     const passwordHash = await _hashPassword(password);
 
-    // 3. Create user profile with hashed password
+    // 3. Create user profile
     // This will throw an error if display name is already taken
     try {
       await _insertUserProfile(userId, {
         displayName,
         age,
         modeList,
-        passwordHash,
+        dataRangerMode,
       });
     } catch (error: any) {
       // Clean up the anonymous session if profile creation fails
@@ -1228,7 +1230,7 @@ export const AuthService: IAuthService = {
     // stored locally in secure storage for local device access control.
     // This is currently handled by AuthContext or should be implemented there.
 
-    return { id: userId, displayName, age, modeList, dataRangerMode: false };
+    return { id: userId, displayName, age, modeList, dataRangerMode: dataRangerMode ?? false };
   },
 
   async login(username, password, captchaToken) {
@@ -1307,7 +1309,7 @@ export const AuthService: IAuthService = {
         displayName: existingProfile.displayName,
         age: existingProfile.age,
         modeList: existingProfile.modeList,
-        passwordHash: recovery.passwordHash,
+        dataRangerMode: existingProfile.dataRangerMode,
       },
       true, // Skip display name check since we're migrating existing profile
     );

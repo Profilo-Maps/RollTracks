@@ -14,7 +14,7 @@ interface AuthContextType {
   isLoading: boolean;
   isAuthenticated: boolean;
   signIn: (displayName: string, password: string, captchaToken?: string) => Promise<void>;
-  signUp: (userData: Omit<User, 'id' | 'dataRangerMode'> & { password: string; captchaToken?: string }) => Promise<void>;
+  signUp: (userData: Omit<User, 'id'> & { password: string; captchaToken?: string }) => Promise<void>;
   signOut: () => Promise<void>;
   deleteUserData: () => Promise<void>;
   updateUser: (updates: Partial<User>) => Promise<void>;
@@ -71,7 +71,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   };
 
-  const signUp = async (userData: Omit<User, 'id' | 'dataRangerMode'> & { password: string; captchaToken?: string }) => {
+  const signUp = async (userData: Omit<User, 'id'> & { password: string; captchaToken?: string }) => {
     setIsLoading(true);
     try {
       const profile = await AuthService.register({
@@ -80,6 +80,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         age: userData.age,
         password: userData.password,
         modeList: userData.modeList,
+        dataRangerMode: userData.dataRangerMode,
         captchaToken: userData.captchaToken,
       });
       setUser(profile);

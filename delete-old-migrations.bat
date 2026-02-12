@@ -1,0 +1,33 @@
+@echo off
+echo Deleting old migration files...
+cd supabase\migrations
+del 20250209000000_convert_to_geography.sql
+del 20250209000001_complete_auth_security.sql
+del 20250209000002_fix_account_recovery_rls.sql
+del 20250209000003_secure_registration_function.sql
+del 20250209000004_clean_dev_passwords.sql
+del 20250209000005_display_name_check_function.sql
+del 20250209000006_harden_security_definers.sql
+del 20250209000007_fix_user_recovery_links_rls.sql
+del 20250209000008_add_account_lockout.sql
+del 20250209000009_migrate_to_argon2.sql
+del 20250209000010_fix_argon2_regex.sql
+del 20250209000011_update_trips_table_binning.sql
+del 20250209000012_anonymization_census_block_clipping.sql
+del 20250210000000_fix_census_block_insert.sql
+del 20250210000001_add_reached_dest.sql
+del 20250210000002_add_od_block_geoids.sql
+del 20250211000000_add_relative_times.sql
+del 20250211000000_initial_schema.sql
+del 20250211000001_convert_geometry_to_polyline.sql
+del 20250211000002_fix_trip_insert_trigger.sql
+del 20250211000003_fix_trip_id_column.sql
+del 20250211000004_fix_polyline_functions.sql
+del 20250211000010_fix_census_blocks_and_account_deletion.sql
+cd ..\..
+echo Done! Only the squashed migration remains.
+echo.
+echo Next steps:
+echo 1. Run: supabase db reset
+echo 2. Run: node scripts/seed-census-blocks.js
+pause
