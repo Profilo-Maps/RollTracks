@@ -14,14 +14,19 @@ import {
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import TurnstileCaptcha from '@/components/TurnstileCaptcha';
+import { Colors, Fonts } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import { errorNotification, mediumImpact } from '@/utils/haptics';
 
 const FAILED_LOGIN_KEY = 'failed_login_attempts';
 const FAILED_LOGIN_THRESHOLD = 3;
 
 export default function LoginScreen() {
   const { signIn } = useAuth();
+  const { colorScheme } = useTheme();
+  const colors = Colors[colorScheme];
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -75,16 +80,19 @@ export default function LoginScreen() {
     setError('');
 
     if (!displayName.trim()) {
+      errorNotification();
       setError('Please enter your display name.');
       return;
     }
     if (!password.trim()) {
+      errorNotification();
       setError('Please enter your password.');
       return;
     }
 
     // Require captcha if threshold reached
     if (failedAttempts >= FAILED_LOGIN_THRESHOLD && !captchaToken) {
+      errorNotification();
       setError('Please complete the captcha verification.');
       return;
     }
@@ -97,6 +105,7 @@ export default function LoginScreen() {
       // Navigation will happen automatically via AuthContext state change
     } catch (e: any) {
       // Failed login - increment counter
+      errorNotification();
       await incrementFailedAttempts();
       setError(e.message || 'Login failed. Please check your credentials.');
       // Reset captcha token so user must complete it again
@@ -190,7 +199,10 @@ export default function LoginScreen() {
 
               <TouchableOpacity
                 style={[styles.button, { backgroundColor: tintColor }]}
-                onPress={handleLogin}
+                onPress={() => {
+                  mediumImpact();
+                  handleLogin();
+                }}
                 disabled={isLoading}
                 activeOpacity={0.7}
               >
@@ -198,9 +210,7 @@ export default function LoginScreen() {
                   <ActivityIndicator color="#fff" />
                 ) : (
                   <ThemedText
-                    style={styles.buttonText}
-                    lightColor="#fff"
-                    darkColor="#11181C"
+                    style={[styles.buttonText, { color: colors.tintButtonText }]}
                   >
                     Log In
                   </ThemedText>
@@ -246,7 +256,7 @@ const styles = StyleSheet.create({
   },
   label: {
     marginBottom: 6,
-    fontWeight: '600',
+    fontWeight: '800',
   },
   input: {
     borderWidth: 1,
@@ -254,6 +264,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
+    fontFamily: Fonts.regular,
     marginBottom: 16,
     backgroundColor: 'transparent',
   },
@@ -289,7 +300,7 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '800',
   },
   link: {
     marginTop: 20,

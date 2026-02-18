@@ -137,15 +137,26 @@ class HistoryServiceClass {
     avgTripLength: number;
     avgTripDuration: number;
     totalTrips: number;
+    totalFeaturesRated: number;
   }> {
     try {
       const completedTrips = await this.getUserTrips({ status: 'completed' });
+
+      // Fetch total rating count (non-fatal)
+      let totalFeaturesRated = 0;
+      try {
+        const ratings = await DataService.getUserRatings();
+        totalFeaturesRated = ratings.length;
+      } catch {
+        totalFeaturesRated = 0;
+      }
 
       if (completedTrips.length === 0) {
         return {
           avgTripLength: 0,
           avgTripDuration: 0,
           totalTrips: 0,
+          totalFeaturesRated,
         };
       }
 
@@ -162,6 +173,7 @@ class HistoryServiceClass {
         avgTripLength: totalDistance / completedTrips.length,
         avgTripDuration: totalDuration / completedTrips.length,
         totalTrips: completedTrips.length,
+        totalFeaturesRated,
       };
     } catch (error) {
       console.error('[HistoryService] Failed to fetch profile statistics:', error);

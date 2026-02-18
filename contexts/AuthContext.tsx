@@ -13,6 +13,7 @@ interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  hasNetworkError: boolean;
   signIn: (displayName: string, password: string, captchaToken?: string) => Promise<void>;
   signUp: (userData: Omit<User, 'id'> & { password: string; captchaToken?: string }) => Promise<void>;
   signOut: () => Promise<void>;
@@ -20,6 +21,7 @@ interface AuthContextType {
   updateUser: (updates: Partial<User>) => Promise<void>;
   toggleDataRangerMode: () => Promise<void>;
   checkDisplayNameAvailability: (displayName: string) => Promise<boolean>;
+  retryConnection: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -31,31 +33,57 @@ interface AuthProviderProps {
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [hasNetworkError, setHasNetworkError] = useState(false);
+
+  const checkSession = async () => {
+    try {
+      console.log('[AuthContext] Starting session check...');
+      setIsLoading(true);
+      setHasNetworkError(false);
+      
+      // Add timeout to prevent infinite loading (5 seconds for initial check)
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Session check timeout')), 5000)
+      );
+      
+      const profile = await Promise.race([
+        AuthService.getCurrentUser(),
+        timeoutPromise
+      ]) as UserProfile | null;
+      
+      console.log('[AuthContext] Session check succeeded, profile:', profile ? 'found' : 'null');
+      if (profile) setUser(profile);
+    } catch (error) {
+      console.error('[AuthContext] Session check failed:', error);
+      
+      // Check if it's a network error
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isNetworkError = 
+        errorMessage.includes('Network request failed') ||
+        errorMessage.includes('Session check timeout') ||
+        errorMessage.includes('fetch failed');
+      
+      console.log('[AuthContext] Is network error?', isNetworkError);
+      
+      if (isNetworkError) {
+        console.log('[AuthContext] Setting hasNetworkError to true');
+        setHasNetworkError(true);
+      }
+      // Continue to app even if session check fails
+      // User will be redirected to login screen
+    } finally {
+      console.log('[AuthContext] Session check complete, setting isLoading to false');
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const checkSession = async () => {
-      try {
-        // Add timeout to prevent infinite loading (30 seconds)
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Session check timeout')), 30000)
-        );
-        
-        const profile = await Promise.race([
-          AuthService.getCurrentUser(),
-          timeoutPromise
-        ]) as UserProfile | null;
-        
-        if (profile) setUser(profile);
-      } catch (error) {
-        console.error('Session check failed:', error);
-        // Continue to app even if session check fails
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
     checkSession();
   }, []);
+
+  const retryConnection = async () => {
+    await checkSession();
+  };
 
   const signIn = async (displayName: string, password: string, captchaToken?: string) => {
     setIsLoading(true);
@@ -156,6 +184,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         user,
         isLoading,
         isAuthenticated: !!user,
+        hasNetworkError,
         signIn,
         signUp,
         signOut,
@@ -163,6 +192,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         updateUser,
         toggleDataRangerMode,
         checkDisplayNameAvailability,
+        retryConnection,
       }}
     >
       {children}

@@ -1,4 +1,5 @@
 import { DarkTheme, DefaultTheme, ThemeProvider as NavigationThemeProvider } from '@react-navigation/native';
+import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
@@ -10,8 +11,18 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { NativeAdapter } from '@/adapters/NativeAdapter';
 import { LoadingScreen } from '@/components/LoadingScreen';
+import { NetworkErrorScreen } from '@/components/NetworkErrorScreen';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { DataRangerProvider } from '@/contexts/DataRangerContext';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
+import {
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+    Inter_800ExtraBold,
+    Inter_900Black,
+} from '@expo-google-fonts/inter';
 
 // Keep the native splash screen visible while we fetch resources
 SplashScreen.preventAutoHideAsync();
@@ -45,12 +56,28 @@ try {
  * User Auth Context to control which stack is shown based on authentication state.
  */
 export default function RootLayout() {
+  const [fontsLoaded] = useFonts({
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+    Inter_800ExtraBold,
+    Inter_900Black,
+  });
+
+  // Don't render until fonts are loaded
+  if (!fontsLoaded) {
+    return null;
+  }
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <ThemeProvider>
           <AuthProvider>
-            <ThemedNavigator />
+            <DataRangerProvider>
+              <ThemedNavigator />
+            </DataRangerProvider>
           </AuthProvider>
         </ThemeProvider>
       </SafeAreaProvider>
@@ -69,7 +96,12 @@ function ThemedNavigator() {
 }
 
 function RootNavigator() {
-  const { isLoading, isAuthenticated } = useAuth();
+  const { isLoading, isAuthenticated, hasNetworkError, retryConnection } = useAuth();
+
+  // Log state changes for debugging
+  useEffect(() => {
+    console.log('[RootNavigator] State:', { isLoading, isAuthenticated, hasNetworkError });
+  }, [isLoading, isAuthenticated, hasNetworkError]);
 
   // Request GPS permissions when app loads and user is authenticated
   useEffect(() => {
@@ -103,6 +135,7 @@ function RootNavigator() {
 
   // Show loading screen while checking auth state
   if (isLoading) {
+    console.log('[RootNavigator] Rendering LoadingScreen');
     return (
       <>
         <LoadingScreen />
@@ -111,6 +144,18 @@ function RootNavigator() {
     );
   }
 
+  // Show network error screen if connection failed
+  if (hasNetworkError) {
+    console.log('[RootNavigator] Rendering NetworkErrorScreen');
+    return (
+      <>
+        <NetworkErrorScreen onRetry={retryConnection} />
+        <StatusBar style="auto" translucent backgroundColor="transparent" />
+      </>
+    );
+  }
+
+  console.log('[RootNavigator] Rendering Stack navigator');
   // Define all screens unconditionally - routing logic handled by index.tsx
   return (
     <>

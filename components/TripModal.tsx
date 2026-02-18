@@ -16,20 +16,21 @@
  * - onEndOrphanedTrip: callback when user ends an orphaned trip
  */
 
-import { Colors } from '@/constants/theme';
+import { Colors, Fonts } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { OrphanedTripInfo, TripService } from '@/services/TripService';
+import { mediumImpact, selectionFeedback, successNotification, warningNotification } from '@/utils/haptics';
 import React, { useEffect, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Modal,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  TouchableOpacity,
+  View
 } from 'react-native';
 import { ThemedText } from './themed-text';
 
@@ -99,6 +100,7 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
   const handleResumeTrip = async () => {
     if (!orphanedTrip) return;
 
+    mediumImpact(); // Medium impact for resume action
     setIsProcessing(true);
     try {
       await TripService.resumeTrip();
@@ -121,6 +123,7 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
   const handleEndOrphanedTrip = async () => {
     if (!orphanedTrip) return;
 
+    warningNotification(); // Warning for ending trip
     setIsProcessing(true);
     try {
       const tripSummary = await TripService.endTrip();
@@ -146,6 +149,8 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
       return;
     }
 
+    successNotification(); // Success notification for starting trip
+
     onStartTrip({
       mode: selectedMode,
       comfort,
@@ -160,6 +165,8 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
 
   const handlePostTripSubmit = () => {
     if (reachedDest === null) return;
+
+    successNotification(); // Success notification for completing survey
 
     if (onPostTripComplete) {
       onPostTripComplete({ reachedDest });
@@ -266,7 +273,10 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
                           borderColor: reachedDest === true ? '#4CAF50' : colors.icon,
                         },
                       ]}
-                      onPress={() => setReachedDest(true)}
+                      onPress={() => {
+                        selectionFeedback();
+                        setReachedDest(true);
+                      }}
                       activeOpacity={0.7}
                     >
                       <ThemedText
@@ -288,7 +298,10 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
                           borderColor: reachedDest === false ? colors.buttonDanger ?? '#FF3B30' : colors.icon,
                         },
                       ]}
-                      onPress={() => setReachedDest(false)}
+                      onPress={() => {
+                        selectionFeedback();
+                        setReachedDest(false);
+                      }}
                       activeOpacity={0.7}
                     >
                       <ThemedText
@@ -321,7 +334,7 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
                   disabled={reachedDest === null}
                   activeOpacity={0.8}
                 >
-                  <ThemedText style={[styles.startButtonText, { color: colors.buttonText }]}>
+                  <ThemedText style={[styles.startButtonText, { color: reachedDest !== null ? colors.buttonText : (colorScheme === 'dark' ? '#000000' : '#FFFFFF') }]}>
                     Submit
                   </ThemedText>
                 </TouchableOpacity>
@@ -486,14 +499,17 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
                         borderColor: selectedMode === mode ? colors.tint : colors.icon,
                       },
                     ]}
-                    onPress={() => setSelectedMode(mode)}
+                    onPress={() => {
+                      selectionFeedback();
+                      setSelectedMode(mode);
+                    }}
                     activeOpacity={0.7}
                   >
                     <ThemedText
                       style={[
                         styles.modeText,
                         {
-                          color: selectedMode === mode ? colors.buttonText : colors.text,
+                          color: selectedMode === mode ? colors.tintButtonText : colors.text,
                         },
                       ]}
                     >
@@ -523,14 +539,17 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
                         borderColor: colors.icon,
                       },
                     ]}
-                    onPress={() => setComfort(value)}
+                    onPress={() => {
+                      selectionFeedback();
+                      setComfort(value);
+                    }}
                     activeOpacity={0.7}
                   >
                     <ThemedText
                       style={[
                         styles.sliderButtonText,
                         {
-                          color: comfort >= value ? colors.buttonText : colors.icon,
+                          color: comfort >= value ? colors.tintButtonText : colors.icon,
                         },
                       ]}
                     >
@@ -563,14 +582,17 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
                             borderColor: purpose === purposeOption ? colors.tint : colors.icon,
                           },
                         ]}
-                        onPress={() => setPurpose(purposeOption)}
+                        onPress={() => {
+                          selectionFeedback();
+                          setPurpose(purposeOption);
+                        }}
                         activeOpacity={0.7}
                       >
                         <ThemedText
                           style={[
                             styles.purposeText,
                             {
-                              color: purpose === purposeOption ? colors.buttonText : colors.text,
+                              color: purpose === purposeOption ? colors.tintButtonText : colors.text,
                             },
                           ]}
                         >
@@ -598,7 +620,7 @@ export function TripModal({ visible, onClose, onStartTrip, onResumeTrip, onEndOr
                   disabled={!selectedMode || !purpose}
                   activeOpacity={0.8}
                 >
-                  <ThemedText style={[styles.startButtonText, { color: colors.buttonText }]}>
+                  <ThemedText style={[styles.startButtonText, { color: (selectedMode && purpose) ? colors.buttonText : (colorScheme === 'dark' ? '#000000' : '#FFFFFF') }]}>
                     Start Trip
                   </ThemedText>
                 </TouchableOpacity>
@@ -639,14 +661,16 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 20,
-    fontWeight: '600',
+    fontFamily: Fonts.semiBold,
+    fontWeight: '800',
   },
   closeButton: {
     padding: 4,
   },
   closeText: {
     fontSize: 24,
-    fontWeight: '300',
+    fontFamily: Fonts.regular,
+    fontWeight: '600',
   },
   content: {
     paddingHorizontal: 20,
@@ -657,7 +681,8 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 16,
-    fontWeight: '600',
+    fontFamily: Fonts.semiBold,
+    fontWeight: '800',
     marginBottom: 12,
   },
   labelRow: {
@@ -668,7 +693,8 @@ const styles = StyleSheet.create({
   },
   comfortValue: {
     fontSize: 18,
-    fontWeight: '700',
+    fontFamily: Fonts.bold,
+    fontWeight: '900',
   },
   modeGrid: {
     flexDirection: 'row',
@@ -685,7 +711,8 @@ const styles = StyleSheet.create({
   },
   modeText: {
     fontSize: 14,
-    fontWeight: '600',
+    fontFamily: Fonts.semiBold,
+    fontWeight: '800',
   },
   sliderContainer: {
     flexDirection: 'row',
@@ -703,7 +730,8 @@ const styles = StyleSheet.create({
   },
   sliderButtonText: {
     fontSize: 12,
-    fontWeight: '600',
+    fontFamily: Fonts.semiBold,
+    fontWeight: '800',
   },
   comfortLabels: {
     flexDirection: 'row',
@@ -712,6 +740,7 @@ const styles = StyleSheet.create({
   },
   comfortLabel: {
     fontSize: 12,
+    fontFamily: Fonts.regular,
   },
   purposeGrid: {
     flexDirection: 'row',
@@ -728,7 +757,8 @@ const styles = StyleSheet.create({
   },
   purposeText: {
     fontSize: 14,
-    fontWeight: '600',
+    fontFamily: Fonts.semiBold,
+    fontWeight: '800',
   },
   postTripButton: {
     flex: 1,
@@ -753,7 +783,8 @@ const styles = StyleSheet.create({
   },
   startButtonText: {
     fontSize: 18,
-    fontWeight: '600',
+    fontFamily: Fonts.semiBold,
+    fontWeight: '800',
   },
   // Orphaned Trip Styles
   loadingContainer: {
@@ -764,7 +795,8 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 16,
     fontSize: 14,
-    fontWeight: '500',
+    fontFamily: Fonts.medium,
+    fontWeight: '700',
   },
   warningBanner: {
     flexDirection: 'row',
@@ -782,12 +814,14 @@ const styles = StyleSheet.create({
   },
   warningTitle: {
     fontSize: 16,
-    fontWeight: '700',
+    fontFamily: Fonts.bold,
+    fontWeight: '900', // Upgraded from 700 to 900
     marginBottom: 4,
   },
   warningDescription: {
     fontSize: 14,
-    fontWeight: '500',
+    fontFamily: Fonts.medium,
+    fontWeight: '700', // Upgraded from 500 to 700
   },
   tripDetails: {
     borderRadius: 12,
@@ -801,14 +835,17 @@ const styles = StyleSheet.create({
   },
   detailLabel: {
     fontSize: 14,
-    fontWeight: '500',
+    fontFamily: Fonts.medium,
+    fontWeight: '700', // Upgraded from 500 to 700
   },
   detailValue: {
     fontSize: 14,
-    fontWeight: '600',
+    fontFamily: Fonts.semiBold,
+    fontWeight: '800', // Upgraded from 600 to 800
   },
   infoText: {
     fontSize: 14,
+    fontFamily: Fonts.regular,
     lineHeight: 20,
     textAlign: 'center',
   },
@@ -827,6 +864,7 @@ const styles = StyleSheet.create({
   },
   actionButtonText: {
     fontSize: 18,
+    fontFamily: Fonts.semiBold,
     fontWeight: '600',
   },
 });

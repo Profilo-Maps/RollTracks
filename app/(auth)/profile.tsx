@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 
 import { BottomNavigationBarComponent } from '@/components/BottomNavigationBarComponent';
 import SelectModeListComponent from '@/components/SelectModeListComponent';
@@ -36,6 +36,7 @@ export default function ProfileScreen() {
     avgTripLength: number;
     avgTripDuration: number;
     totalTrips: number;
+    totalFeaturesRated: number;
   } | null>(null);
   const [isLoadingStats, setIsLoadingStats] = useState(true);
 
@@ -44,6 +45,7 @@ export default function ProfileScreen() {
   const buttonTextColor = useThemeColor({}, 'buttonText');
   const backgroundColor = useThemeColor({}, 'background');
   const tintColor = useThemeColor({}, 'tint');
+  const textColor = useThemeColor({}, 'text');
 
   // Fetch statistics on mount
   useEffect(() => {
@@ -62,6 +64,7 @@ export default function ProfileScreen() {
         avgTripLength: 0,
         avgTripDuration: 0,
         totalTrips: 0,
+        totalFeaturesRated: 0,
       });
     } finally {
       setIsLoadingStats(false);
@@ -236,6 +239,14 @@ export default function ProfileScreen() {
                 </ThemedText>
                 <ThemedText style={styles.statLabel}>Total Trips</ThemedText>
               </View>
+              {user?.dataRangerMode && (
+                <View style={styles.statItem}>
+                  <ThemedText type="defaultSemiBold">
+                    {statistics?.totalFeaturesRated ?? 0}
+                  </ThemedText>
+                  <ThemedText style={styles.statLabel}>Features Rated</ThemedText>
+                </View>
+              )}
             </View>
           )}
         </ThemedView>
@@ -252,20 +263,20 @@ export default function ProfileScreen() {
             />
           </View>
 
-          <Pressable style={styles.settingRow} onPress={handleToggleDataRanger}>
+          <View style={styles.settingRow}>
             <ThemedText>DataRanger Mode</ThemedText>
-            <View style={[
-              styles.toggle,
-              user?.dataRangerMode ? { backgroundColor: tintColor } : styles.toggleOff
-            ]}>
-              <ThemedText style={[
-                styles.toggleText, 
-                { color: user?.dataRangerMode ? buttonTextColor : '#666' }
-              ]}>
+            <View style={styles.switchRow}>
+              <ThemedText style={styles.switchLabel}>
                 {user?.dataRangerMode ? 'ON' : 'OFF'}
               </ThemedText>
+              <Switch
+                value={user?.dataRangerMode}
+                onValueChange={handleToggleDataRanger}
+                trackColor={{ false: '#767577', true: tintColor }}
+                thumbColor={user?.dataRangerMode ? '#fff' : '#f4f3f4'}
+              />
             </View>
-          </Pressable>
+          </View>
         </ThemedView>
 
         {/* Actions Section */}
@@ -387,6 +398,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
   },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  switchLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    minWidth: 30,
+  },
   toggle: {
     paddingHorizontal: 12,
     paddingVertical: 6,
@@ -399,7 +420,7 @@ const styles = StyleSheet.create({
   },
   toggleText: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '800',
   },
   button: {
     paddingVertical: 14,
@@ -412,7 +433,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   buttonText: {
-    fontWeight: '600',
+    fontWeight: '800',
   },
   modalOverlay: {
     flex: 1,

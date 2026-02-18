@@ -2,6 +2,8 @@ import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
+import { Colors, Fonts } from '@/constants/theme';
+import { useTheme } from '@/contexts/ThemeContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 
 type ThemeOption = 'light' | 'auto' | 'dark';
@@ -18,6 +20,8 @@ interface ThemeSliderComponentProps {
  * Provides clear visual feedback with proper contrast in both light and dark modes.
  */
 export function ThemeSliderComponent({ value, onChange }: ThemeSliderComponentProps) {
+  const { colorScheme } = useTheme();
+  const colors = Colors[colorScheme];
   const tintColor = useThemeColor({}, 'tint');
   const backgroundColor = useThemeColor({}, 'background');
   const textColor = useThemeColor({}, 'text');
@@ -53,7 +57,7 @@ export function ThemeSliderComponent({ value, onChange }: ThemeSliderComponentPr
             <ThemedText
               style={[
                 styles.optionText,
-                isSelected && { color: backgroundColor, fontWeight: '600' },
+                isSelected && { color: colors.tintButtonText, fontWeight: '800' },
               ]}
             >
               {getLabel(option)}
@@ -82,5 +86,6 @@ const styles = StyleSheet.create({
   },
   optionText: {
     fontSize: 11,
+    fontFamily: Fonts.regular,
   },
 });

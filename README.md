@@ -57,7 +57,15 @@ RollTracks creates an anonymized, open dataset of non-car transport activity for
    node scripts/seed-census-blocks.js
    ```
 
-5. Start the development server
+5. Upload DataRanger assets to Supabase Storage (optional, only if using DataRanger mode)
+
+   ```bash
+   node scripts/upload-dataranger-assets.js
+   ```
+
+   This uploads `curb_ramps.geojson` and `sidewalks.geojson` to the `dataranger-assets` storage bucket.
+
+6. Start the development server
 
    ```bash
    npm start
@@ -161,10 +169,44 @@ ActiveTripScreen → TripService → NativeAdapter → Native GPS
   - `data/Blocks.geojson` - Census block polygons for anonymization clipping
 - `/scripts` - Utility scripts
   - `seed-census-blocks.js` - Loads census blocks into Supabase
+  - `upload-dataranger-assets.js` - Uploads curb ramps and sidewalk data to Supabase Storage
 - `/supabase` - Database migrations and server-side functions
 - `/constants` - Configuration and theme
 
 ## Core Services
+
+### DataRangerService
+
+**Purpose:** Manages curb ramp feature data for DataRanger mode with on-demand downloading and caching
+
+**Responsibilities:**
+- Downloads curb ramp GeoJSON data from Supabase Storage when DataRanger mode is enabled
+- Caches feature data locally in AsyncStorage for offline access
+- Checks for updates on app launch when DataRanger mode is active
+- Builds spatial grid index for efficient proximity queries (50m radius)
+- Provides features to ActiveTripScreen for display on map
+- Manages feature ratings and uploads to Supabase
+- Clears cache when DataRanger mode is disabled
+
+**Storage Strategy:**
+- Features stored server-side in Supabase Storage bucket (`dataranger-assets`)
+- Downloaded only when user enables DataRanger mode (opt-in feature)
+- Cached in AsyncStorage with version timestamp for update detection
+- ~17 MB curb ramps data (San Francisco CRIS dataset)
+- Spatial indexing enables instant queries without server round-trips
+
+**Privacy Note:**
+- Feature data is public (city infrastructure data)
+- User ratings are anonymized and linked to trips (which are already anonymized)
+- No personal data stored in feature cache
+
+**Dependencies:**
+- DatabaseAdapter (download and version checking)
+- AsyncStorage (local caching)
+
+**Used By:**
+- DataRangerContext (initialization)
+- ActiveTripScreen (feature queries during trips)
 
 ### TripService
 
@@ -431,6 +473,17 @@ All slots are transparent by default, allowing the map to show through unless a 
     - Triggered when user stops a trip on ActiveTripScreen
     - Result stored as `reachedDest` boolean in trip metadata
     - Used for analyzing trip completion rates and routing effectiveness
+- **DataRangerCallout**: Feature rating callout bubble for DataRanger mode
+  - Available on Active Trip and Trip Summary screens only
+  - Displays feature details (location, condition score, intersection position, curb position)
+  - Rating slider (1-10 scale, defaults to 5)
+  - Image upload button (camera or photo library via expo-image-picker)
+  - Calls DataRangerService to log ratings to Supabase rated_features table
+  - Compact design optimized for MapboxGL.Callout display
+  - Supports re-rating (pre-fills existing rating when available)
+  - **6-Hour Rating Window**: Features encountered more than 6 hours ago display in read-only mode (info only, no interactive UI)
+  - Read-only mode shows existing rating without slider/upload controls
+  - Not available on Home screen (Home screen shows polylines only for trip navigation)
 - **TripHistoryCard**: Displays trip summary with privacy-preserving binned data (time of day bin, weekday/weekend, mode, duration, distance, comfort rating)
   - Formats time bins into readable labels (e.g., "Morning Rush", "Late Night")
   - Shows weekday vs weekend classification
@@ -662,8 +715,117 @@ When setting up Supabase, ensure proper RLS policies are configured. See `/supab
 - `20250209000012_anonymization_census_block_clipping.sql` - Census block clipping trigger for origin/destination anonymization
 - `20250210000000_fix_census_block_insert.sql` - Fixes census block data insertion issues
 - `20250210000001_add_reached_dest.sql` - Adds post-trip survey field and device/software version tracking to user profiles
+- `20250212000000_dataranger_assets.sql` - Creates storage bucket and metadata table for DataRanger feature assets
+- `20250212000001_feature_images.sql` - Creates storage bucket for user-uploaded feature photos and adds image_url column to rated_features table
 
 Refer to `/supabase/SECURITY_DEFINER_AUDIT.md` for security audit documentation.
+
+### Security Advisors
+
+RollTracks uses Supabase's security advisor to continuously monitor for vulnerabilities. As of the latest check:
+
+**Resolved:**
+- ✅ All 16 function search path warnings fixed (migration `20250212000002_fix_function_search_path_warnings.sql`)
+  - Added `SET search_path = ''` to all database functions to prevent search path hijacking attacks
+
+**Remaining Warnings (Expected/Acceptable):**
+- ⚠️ **Anonymous Access Policies** - Expected for privacy-first architecture
+  - `asset_metadata`, `curb_ramps`, `storage.objects` tables allow public read access
+  - Required for DataRanger mode and public infrastructure data
+- ⚠️ **PostGIS Extension in Public Schema** - Cannot be moved without breaking existing spatial functions
+- ⚠️ **spatial_ref_sys RLS Disabled** - PostGIS system table, requires superuser to modify
+- ⚠️ **Leaked Password Protection Disabled** - Consider enabling in Supabase Auth settings for additional security
+
+To check current security status:
+```bash
+# Using Supabase CLI
+supabase db lint --level warning
+
+# Or via Supabase Dashboard
+# Navigate to: Database → Advisors → Security
+```
+
+## DataRanger Mode
+
+DataRanger mode is an opt-in feature that enables users to validate and improve urban infrastructure data quality.
+
+### Features
+
+- **Curb Ramp Rating**: Rate condition of curb ramps (1-10 scale) during trips with optional photo uploads
+- **Photo Documentation**: Upload images of curb ramps and accessibility features using camera or photo library
+- **Sidewalk Correction**: Correct AI-generated sidewalk network data
+- **On-Demand Asset Loading**: Feature data downloaded only when DataRanger mode is enabled
+- **Automatic Updates**: Checks for new feature data on app launch
+
+### Asset Management
+
+**Storage:**
+- Feature data stored in Supabase Storage bucket: `dataranger-assets`
+- Assets: `curb_ramps.geojson` (~17 MB), `sidewalks.geojson` (TBD)
+- Version tracking via `asset_metadata` table
+
+**Caching:**
+- Downloaded assets cached in AsyncStorage
+- Cache persists between app sessions
+- Update check on each app launch when DataRanger mode is active
+- Cache cleared when DataRanger mode is disabled (optional)
+
+**Upload Script:**
+```bash
+node scripts/upload-dataranger-assets.js
+```
+
+This script:
+1. Uploads `assets/data/curb_ramps.geojson` to Supabase Storage
+2. Updates `asset_metadata` table with version timestamp
+3. Enables automatic update detection in the app
+
+**User Flow:**
+1. User enables DataRanger mode in Profile Screen
+2. DataRangerContext initializes and downloads feature data
+3. Features cached locally for offline access
+4. On subsequent app launches, checks for updates
+
+### Image Upload
+
+**Feature Photo Documentation:**
+- Users can upload photos of curb ramps and accessibility features when rating them
+- Images stored in Supabase Storage bucket: `feature-images`
+- Organized by user ID for access control and cleanup
+- Supports both camera capture and photo library selection
+
+**Storage Structure:**
+```
+feature-images/
+  └── {userId}/
+      └── {crisId}_{timestamp}.{ext}
+```
+
+**Permissions:**
+- iOS: Camera and Photo Library permissions configured in app.json
+- Android: CAMERA, READ_MEDIA_IMAGES, READ_EXTERNAL_STORAGE permissions
+- Permissions requested at runtime when user attempts to upload
+
+**Implementation:**
+- Package: `expo-image-picker` for camera and gallery access
+- Image quality: 0.8 compression for optimal balance between quality and file size
+- Aspect ratio: 4:3 with editing enabled
+- Upload handled by DatabaseAdapter with automatic URL generation
+- Image URLs stored in `rated_features.image_url` column
+
+**Privacy:**
+- Images are public (linked to anonymized ratings)
+- User IDs in storage paths are anonymous Supabase UUIDs
+- No EXIF data or metadata preserved that could identify users
+- Images can be deleted when user deletes their rating or account
+5. During active trips, features displayed within 50m of user position
+6. User can rate features via DataRanger modal
+7. Ratings uploaded to Supabase and linked to trip
+
+**Privacy:**
+- Feature data is public (city infrastructure)
+- User ratings are anonymized (linked to anonymized trips)
+- No personal data in feature cache
 
 ## Screen Implementation Status
 
@@ -699,3 +861,290 @@ All slots are transparent by default to show the map through.
 - [Supabase Documentation](https://supabase.com/docs)
 
 For detailed architecture information, see `/prompts/RollTracks Architecture.md`.
+
+
+## User Experience
+
+### Haptic Feedback
+
+RollTracks provides comprehensive haptic feedback throughout the app for enhanced tactile interaction on both iOS and Android.
+
+**Implementation:**
+- Centralized haptic utility (`/utils/haptics.ts`) for consistent feedback patterns
+- Cross-platform support with appropriate fallbacks
+- Uses `expo-haptics` for native haptic engine access
+
+**Platform Support:**
+
+| Platform | Impact Feedback | Notification Feedback | Selection Feedback |
+|----------|----------------|----------------------|-------------------|
+| **iOS** | ✅ Full support (Taptic Engine) | ✅ Full support | ✅ Full support |
+| **Android** | ✅ Full support (Vibration) | ⚠️ Falls back to impact | ⚠️ Falls back to light impact |
+| **Web** | ❌ No support | ❌ No support | ❌ No support |
+
+**Platform Differences:**
+- **iOS**: Uses native Taptic Engine with distinct patterns for each feedback type
+- **Android**: Supports impact feedback (light/medium/heavy vibration patterns). Notification and selection types fall back to impact feedback since Android doesn't have equivalent native patterns
+- **Web**: Haptic feedback gracefully degrades (no-op) on web platform
+
+**Feedback Types:**
+
+| Type | Usage | Examples | Android Fallback |
+|------|-------|----------|------------------|
+| **Light Impact** | Subtle selections and toggles | Tab switches, mode selection, comfort slider | Light vibration |
+| **Medium Impact** | Standard interactions | Navigation buttons, recenter, pause/resume | Medium vibration |
+| **Heavy Impact** | Primary actions | Record button press | Heavy vibration |
+| **Success Notification** | Successful completions | Trip started, survey submitted | Medium vibration |
+| **Warning Notification** | Destructive actions | Stop trip confirmation | Heavy vibration |
+| **Error Notification** | Validation errors | Login failed, form errors | Heavy vibration |
+| **Selection Feedback** | Picker changes | Mode/purpose selection, comfort level | Light vibration |
+
+**Coverage:**
+
+All interactive elements include appropriate haptic feedback:
+- Bottom navigation (home, history, record button)
+- Trip modal (mode, comfort, purpose selection)
+- Post-trip survey (yes/no buttons)
+- Trip controls (pause, resume, stop)
+- Navigation (back button, profile button)
+- Recenter button
+- Authentication (login, create account)
+- Settings toggles (DataRanger mode)
+
+**Benefits:**
+- Improved accessibility for users with visual impairments
+- Enhanced tactile confirmation of actions
+- Better user confidence during critical operations (trip recording)
+- Consistent feedback patterns across the app
+- Cross-platform support for broader accessibility
+
+**Usage Example:**
+
+```typescript
+import { mediumImpact, successNotification } from '@/utils/haptics';
+
+const handleButtonPress = () => {
+  mediumImpact(); // Provide immediate tactile feedback (iOS & Android)
+  performAction();
+};
+
+const handleSuccess = () => {
+  successNotification(); // Confirm successful completion (iOS: success pattern, Android: medium vibration)
+  navigateToNextScreen();
+};
+```
+
+
+## DataRanger Mode Setup
+
+DataRanger mode is an optional feature that allows users to rate curb ramps and correct sidewalk network data during trips. When enabled, the app downloads feature data from Supabase Storage for offline access.
+
+### Prerequisites
+
+1. Curb ramp GeoJSON data in `assets/data/curb_ramps.geojson`
+2. Supabase Storage bucket configured for DataRanger assets
+3. Asset metadata table in Supabase
+
+### Setup Steps
+
+#### 1. Verify Supabase Storage Bucket
+
+The `dataranger-assets` bucket should already exist in your Supabase project (created by migration `20250212000000_dataranger_assets.sql`). Verify it's configured correctly:
+
+**Via Supabase Dashboard:**
+1. Navigate to Storage → Buckets
+2. Verify `dataranger-assets` bucket exists and is marked as **Public**
+3. If the bucket doesn't exist, the upload script will create it automatically
+
+**Via SQL (optional):**
+```sql
+SELECT id, name, public FROM storage.buckets WHERE name = 'dataranger-assets';
+-- Should return: public = true
+```
+
+#### 2. Upload Assets to Supabase Storage
+
+**Prerequisites:**
+- Service role key from Supabase (required for admin operations)
+- Add to your `.env` file:
+  ```bash
+  SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
+  ```
+- Find it in: Supabase Dashboard → Project Settings → API → `service_role` key
+- ⚠️ **WARNING**: Keep this key secret! Never commit it to version control. Add `.env` to `.gitignore`.
+
+Run the upload script to upload the curb ramps data:
+
+```bash
+node scripts/upload-curb-ramps-storage.js
+```
+
+This script will:
+- Verify/create the `dataranger-assets` public storage bucket
+- Upload `curb_ramps.geojson` (~17 MB) to the bucket
+- Update the `asset_metadata` table with version and file size information
+- Display the public URL for verification
+
+**Expected Output:**
+```
+Reading curb_ramps.geojson...
+File size: 17.23 MB
+✓ Bucket already exists
+Uploading curb_ramps.geojson to Supabase Storage...
+✓ File uploaded successfully!
+Path: curb_ramps.geojson
+Public URL: https://[project-ref].supabase.co/storage/v1/object/public/dataranger-assets/curb_ramps.geojson
+✓ Asset metadata updated
+✓ Done!
+```
+
+#### 3. Verify Upload Success
+
+**Option A: Via Supabase Dashboard**
+1. Navigate to Storage → dataranger-assets bucket
+2. Verify `curb_ramps.geojson` appears in the file list
+3. Check file size is approximately 17 MB
+
+**Option B: Via SQL**
+```sql
+SELECT name, metadata->>'size' as size_bytes, created_at 
+FROM storage.objects 
+WHERE bucket_id = 'dataranger-assets' AND name = 'curb_ramps.geojson';
+```
+
+**Option C: Test Download URL**
+
+Open this URL in your browser (replace `[project-ref]` with your Supabase project reference):
+```
+https://[project-ref].supabase.co/storage/v1/object/public/dataranger-assets/curb_ramps.geojson
+```
+
+If configured correctly, the GeoJSON file should download immediately.
+
+#### 4. Enable DataRanger Mode in App
+
+Users can enable DataRanger mode from the Profile screen:
+1. Open the app and navigate to Profile
+2. Toggle "DataRanger Mode" on
+3. The app will automatically download and cache the feature data
+
+**First-time initialization logs:**
+```
+[DataRangerService] Initializing...
+[DataRangerService] No cache found, loading from local assets...
+[DataRangerService] Loaded from local assets
+[DataRangerService] Loaded 17234 features into memory
+[DataRangerService] Spatial index stats: {totalCells: 1523, totalFeatures: 17234}
+```
+
+### How It Works
+
+**Two-Tier Loading Strategy:**
+
+DataRangerService uses a simplified loading approach optimized for React Native:
+
+1. **Cache First** (AsyncStorage)
+   - Fastest: Loads from local cache if available
+   - No network required
+   - Checks for updates in background
+
+2. **Server Download** (Supabase Storage)
+   - Downloads from `dataranger-assets/curb_ramps.geojson` if no cache exists
+   - Caches downloaded data for offline use
+   - Updates asset metadata with version timestamp
+
+**Note**: Local asset bundling is disabled because Metro bundler has issues with large JSON files (17 MB). The app downloads directly from Supabase Storage on first use, then caches for offline access.
+
+**Update Checking:**
+
+When DataRanger mode is enabled and the app launches:
+- Compares local version timestamp with server version
+- Downloads new data if server version is newer
+- Updates cache automatically
+- User sees latest data without manual intervention
+
+**Cache Management:**
+
+- Large GeoJSON data stored in FileSystem (app document directory)
+  - Path: `${FileSystem.documentDirectory}dataranger_curb_ramps.json`
+  - Handles files up to device storage limits (no 6 MB AsyncStorage limit)
+- Version metadata stored in AsyncStorage
+  - Key: `@dataranger/curb_ramps_version`
+  - Small timestamp string for update checking
+- Cache cleared when DataRanger mode is disabled
+- Typical cache size: ~17 MB (San Francisco CRIS dataset)
+
+### Troubleshooting
+
+**Error: "Cannot find module '@/assets/data/curb_ramps.geojson'"**
+
+This error is expected and harmless. Local asset bundling is disabled because Metro bundler has issues with large JSON files. The app will automatically fall back to downloading from Supabase Storage.
+
+**Error: "data.text is not a function"**
+
+This error occurs when the Blob API differs between environments. The DatabaseAdapter now handles both web and React Native Blob formats using FileReader as a fallback.
+
+**Error: "Failed to download curb_ramps.geojson: 400"**
+
+This means the file doesn't exist in Supabase Storage. Run the upload script:
+
+```bash
+node scripts/upload-curb-ramps-storage.js
+```
+
+**Verify the file is accessible:**
+
+The file should be publicly accessible at:
+```
+https://[project-ref].supabase.co/storage/v1/object/public/dataranger-assets/curb_ramps.geojson
+```
+
+Replace `[project-ref]` with your Supabase project reference (found in Project Settings → API → Project URL).
+
+For the RollTracks project, the URL is:
+```
+https://vavqokubsuaiaaqmizso.supabase.co/storage/v1/object/public/dataranger-assets/curb_ramps.geojson
+```
+
+If you get a 400 error when accessing this URL, the file hasn't been uploaded yet.
+
+**Features not appearing on map during active trip**
+
+1. Verify DataRanger mode is enabled in Profile screen
+2. Check that features initialized successfully in logs: `[DataRangerService] Loaded X features into memory`
+3. Ensure GPS permissions are granted
+4. Verify you're within 50m of curb ramp features (default query radius)
+
+**Cache not updating with new data**
+
+1. Disable DataRanger mode in Profile screen
+2. Re-enable DataRanger mode
+3. This forces a fresh download and cache update
+
+### Development Notes
+
+**Adding New Feature Types:**
+
+To add sidewalk segments or other feature types:
+
+1. Add GeoJSON file to `assets/data/` (e.g., `sidewalks.geojson`)
+2. Update `DatabaseAdapter.ts` to support the new asset type
+3. Modify `DataRangerService.ts` to handle the new feature schema
+4. Update the upload script to include the new file
+5. Run the upload script to deploy to Supabase Storage
+
+**Testing Without Server:**
+
+The local assets fallback allows testing DataRanger features without Supabase Storage:
+
+1. Ensure `assets/data/curb_ramps.geojson` exists
+2. Enable DataRanger mode
+3. App will load from local assets and cache
+4. Features will work offline immediately
+
+**Performance Considerations:**
+
+- Spatial grid indexing enables sub-millisecond queries for 50m radius
+- LRU cache (max 10 queries) reduces redundant spatial searches
+- Feature limit of 50 results per query prevents UI overload
+- Haversine distance calculation for precise proximity filtering

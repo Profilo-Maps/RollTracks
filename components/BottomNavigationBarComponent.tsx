@@ -9,13 +9,15 @@
  * Designed to be placed in the footer slot of BasemapLayout
  */
 
-import { Colors } from '@/constants/theme';
+import { Colors, Fonts } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { heavyImpact, mediumImpact } from '@/utils/haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import { ThemedText } from './themed-text';
 import { StartTripParams, TripModal } from './TripModal';
 
@@ -53,6 +55,7 @@ export function BottomNavigationBarComponent({
   const isHistory = pathname === '/(main)/history';
 
   const handleRecordPress = () => {
+    heavyImpact(); // Heavy impact for primary record button
     if (onRecordPress) {
       onRecordPress();
     } else {
@@ -106,10 +109,12 @@ export function BottomNavigationBarComponent({
   };
 
   const handleHomePress = () => {
+    mediumImpact(); // Medium impact for navigation
     router.push('/(main)');
   };
 
   const handleHistoryPress = () => {
+    mediumImpact(); // Medium impact for navigation
     router.push('/(main)/history');
   };
 
@@ -222,8 +227,9 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 11,
+    fontFamily: Fonts.medium,
     marginTop: 4,
-    fontWeight: '500',
+    fontWeight: '700',
   },
 });
 

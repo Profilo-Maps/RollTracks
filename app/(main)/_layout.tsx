@@ -1,58 +1,107 @@
+import { NativeAdapter } from '@/adapters/NativeAdapter';
+import { MapViewComponent } from '@/components/MapViewComponent';
+import { MapProvider, useMap } from '@/contexts/MapContext';
 import { Slot } from 'expo-router';
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
-
 /**
- * Basemap Layout
- * Displays all user route and feature data with a persistent map background.
- *
+ * Main Layout with Persistent Map
+ * 
+ * This layout provides a PERSISTENT MapViewComponent that stays mounted
+ * across all screens in the (main) stack. The map will NOT re-render when
+ * navigating between screens.
+ * 
+ * Screens use MapContext to update what's displayed on the map without
+ * causing re-renders. They render their UI content on top of the persistent
+ * map background.
+ * 
  * Structure:
- * - Map View Component: Full screen background layer (persistent across screens)
- * - Header Slot: Top of screen (transparent by default)
- * - Body Slot: Screen-specific content that overlays the map
- * - Secondary Footer Slot: Above the footer (for recenter button, etc.)
- * - Footer Slot: Bottom of screen (for Bottom Navigation Bar)
- *
- * All slots are transparent by default, allowing the map to show through
- * unless a screen adds opaque content.
+ * - Map View Component: Full screen background layer (PERSISTENT)
+ * - Screen Content: Rendered via Slot, overlays the map
+ * 
+ * Note: Screens are responsible for their own layout structure (header, body, footer slots)
  */
-export default function BasemapLayout() {
-  const colorScheme = useColorScheme();
+export default function MainLayout() {
+  return (
+    <MapProvider>
+      <MainLayoutContent />
+    </MapProvider>
+  );
+}
+
+function MainLayoutContent() {
+  const mapContext = useMap();
+  const mapRef = useRef<any>(null);
+  const [userPosition, setUserPosition] = useState<[number, number] | null>(null);
+  const [isReady, setIsReady] = useState(false);
+
+  // Wait a tick before initializing to ensure auth is ready
+  useEffect(() => {
+    setIsReady(true);
+  }, []);
+
+  // Track user position and update context
+  useEffect(() => {
+    if (!isReady) return;
+
+    let isSubscribed = true;
+
+    const updateUserLocation = async () => {
+      try {
+        const { granted } = await NativeAdapter.checkPermissions();
+        if (!granted) return;
+
+        const position = await NativeAdapter.getCurrentPosition();
+        if (isSubscribed) {
+          setUserPosition([position.longitude, position.latitude]);
+        }
+      } catch (error) {
+        console.error('[MainLayout] Failed to get user position:', error);
+      }
+    };
+
+    updateUserLocation();
+    const intervalId = setInterval(updateUserLocation, 10000);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(intervalId);
+    };
+  }, [isReady]);
+
+  // Handle recenter trigger from context
+  useEffect(() => {
+    if (mapContext.recenterTrigger > 0 && mapRef.current && userPosition) {
+      // Recenter map to user position
+      mapRef.current.setCamera?.({
+        centerCoordinate: userPosition,
+        zoomLevel: mapContext.zoomLevel ?? 15,
+        animationDuration: 500,
+      });
+    }
+  }, [mapContext.recenterTrigger, userPosition, mapContext.zoomLevel]);
 
   return (
     <View style={styles.container}>
-      {/* Map View Component - Persistent Background Layer */}
-      {/* TODO: Replace with MapViewComponent once MapBox Adapter is implemented */}
-      <View
-        style={[
-          styles.mapContainer,
-          { backgroundColor: Colors[colorScheme ?? 'light'].background },
-        ]}
-      >
-        {/* Placeholder for MapViewComponent */}
-        <View style={[styles.mapPlaceholder, { backgroundColor: Colors[colorScheme ?? 'light'].icon + '20' }]} />
+      {/* Persistent Map Background - stays mounted across all screens */}
+      <View style={styles.mapBackground}>
+        <MapViewComponent
+          polylines={mapContext.polylines}
+          polygonOutlines={mapContext.polygonOutlines}
+          features={mapContext.features}
+          centerPosition={mapContext.centerPosition}
+          zoomLevel={mapContext.zoomLevel}
+          interactionState={mapContext.interactionState}
+          showUserLocation={mapContext.showUserLocation}
+          onFeaturePress={mapContext.onFeaturePress}
+          userPosition={userPosition}
+        />
       </View>
 
-      {/* Screen Content Overlay */}
-      <View style={styles.overlay}>
-        {/* Header Slot - screens can add header content */}
-        <View style={styles.headerSlot} />
-
-        {/* Body Slot - screen-specific content via Slot */}
-        <View style={styles.bodySlot}>
-          <Slot />
-        </View>
-
-        {/* Secondary Footer Slot - for recenter button, end correction button, etc. */}
-        <View style={styles.secondaryFooterSlot} />
-
-        {/* Footer Slot - for Bottom Navigation Bar */}
-        <View style={styles.footerSlot}>
-          {/* TODO: Add BottomNavigationBarComponent here */}
-        </View>
+      {/* Screen Content Overlay - changes with navigation */}
+      <View style={styles.screenOverlay}>
+        <Slot />
       </View>
     </View>
   );
@@ -62,33 +111,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  mapContainer: {
+  mapBackground: {
     ...StyleSheet.absoluteFillObject,
   },
-  mapPlaceholder: {
+  screenOverlay: {
     flex: 1,
-    // backgroundColor applied dynamically
-  },
-  overlay: {
-    flex: 1,
-  },
-  headerSlot: {
-    // Transparent header area - screens can add content
-    paddingTop: 0, // No padding - screens handle their own safe area
-    paddingHorizontal: 0,
-  },
-  bodySlot: {
-    flex: 1,
-    // Transparent by default - screen content overlays map
-  },
-  secondaryFooterSlot: {
-    // Above the footer - for floating buttons like recenter
-    paddingHorizontal: 0,
-    paddingBottom: 0,
-  },
-  footerSlot: {
-    // Bottom navigation bar area
-    paddingBottom: 0, // No padding - BottomNavigationBarComponent handles safe area
-    paddingHorizontal: 0,
+    pointerEvents: 'box-none', // Allow touches to pass through to map
   },
 });
