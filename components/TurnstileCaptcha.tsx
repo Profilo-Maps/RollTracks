@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 
+import { Fonts } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 interface TurnstileCaptchaProps {
@@ -231,10 +232,12 @@ const styles = StyleSheet.create({
     color: '#888',
     textAlign: 'center',
     fontStyle: 'italic',
+    fontFamily: Fonts.regular,
   },
   errorText: {
     fontSize: 12,
     color: '#f44336',
     textAlign: 'center',
+    fontFamily: Fonts.regular,
   },
 });

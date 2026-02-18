@@ -1,7 +1,8 @@
 import { StyleSheet, TouchableOpacity } from 'react-native';
 
-import { ThemedView } from '@/components/themed-view';
 import { ThemedText } from '@/components/themed-text';
+import { ThemedView } from '@/components/themed-view';
+import { Fonts } from '@/constants/theme';
 import { useThemeColor } from '@/hooks/use-theme-color';
 
 const MODES = [
@@ -50,7 +51,7 @@ export default function SelectModeListComponent({
             <ThemedText
               style={styles.chipText}
               lightColor={isSelected ? '#fff' : undefined}
-              darkColor={isSelected ? '#11181C' : undefined}
+              darkColor={isSelected ? '#000' : undefined}
             >
               {mode}
             </ThemedText>
@@ -75,5 +76,6 @@ const styles = StyleSheet.create({
   },
   chipText: {
     fontSize: 14,
+    fontFamily: Fonts.regular,
   },
 });

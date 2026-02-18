@@ -1,23 +1,30 @@
 import { Ionicons } from '@expo/vector-icons';
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
+import Svg, { Polyline as SvgPolyline } from 'react-native-svg';
 
 import { Trip } from '@/adapters/DatabaseAdapter';
 import { ThemedText } from '@/components/themed-text';
+import { Fonts } from '@/constants/theme';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import { HistoryService } from '@/services/HistoryService';
 
 /**
  * TripHistoryCard Component
- * 
+ *
  * Shows trip summary information in a card format.
  * Can be styled as a drawer for the Trip Summary Screen.
- * 
+ *
  * Features:
  * - Trip start time, mode, duration, distance
  * - Click opens Trip Summary Screen for that trip
  * - In DataRanger mode: shows features rated or segments corrected count
  * - Props-based styling for card vs drawer format
+ * - Card variant shows polyline route preview in bottom half
  */
+
+const POLYLINE_HEIGHT = 80;
+const POLYLINE_PADDING = 8;
 
 interface TripHistoryCardProps {
   trip: Trip;
@@ -26,9 +33,9 @@ interface TripHistoryCardProps {
   variant?: 'card' | 'drawer';
 }
 
-export function TripHistoryCard({ 
-  trip, 
-  onPress, 
+export function TripHistoryCard({
+  trip,
+  onPress,
   showDataRangerStats = false,
   variant = 'card'
 }: TripHistoryCardProps) {
@@ -60,7 +67,7 @@ export function TripHistoryCard({
   const formatDuration = (seconds: number) => {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
-    
+
     if (hours > 0) {
       return `${hours}h ${minutes}m`;
     }
@@ -96,9 +103,65 @@ export function TripHistoryCard({
     return modeColors[mode.toLowerCase()] ?? '#757575';
   };
 
+  // Decode and normalize polyline coordinates to SVG points string
+  // Uses HistoryService which returns [lng, lat] (GeoJSON order)
+  const svgPoints = useMemo(() => {
+    if (variant === 'drawer' || !trip.geometry) return null;
+
+    try {
+      const coords = HistoryService.decodePolyline(trip.geometry);
+      if (coords.length < 2) return null;
+
+      // Find bounds ([lng, lat] order)
+      let minLat = Infinity, maxLat = -Infinity;
+      let minLng = Infinity, maxLng = -Infinity;
+      for (const [lng, lat] of coords) {
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+        if (lng < minLng) minLng = lng;
+        if (lng > maxLng) maxLng = lng;
+      }
+
+      const latRange = maxLat - minLat || 0.0001;
+      const lngRange = maxLng - minLng || 0.0001;
+
+      // Map to viewBox coordinates (0-100) with padding
+      const drawW = 100 - POLYLINE_PADDING * 2;
+      const drawH = 100 - POLYLINE_PADDING * 2;
+
+      // Maintain aspect ratio
+      const aspectRatio = lngRange / latRange;
+      let scaleX: number, scaleY: number, offsetX: number, offsetY: number;
+
+      if (aspectRatio > (drawW / drawH)) {
+        scaleX = drawW;
+        scaleY = drawW / aspectRatio;
+        offsetX = POLYLINE_PADDING;
+        offsetY = POLYLINE_PADDING + (drawH - scaleY) / 2;
+      } else {
+        scaleY = drawH;
+        scaleX = drawH * aspectRatio;
+        offsetX = POLYLINE_PADDING + (drawW - scaleX) / 2;
+        offsetY = POLYLINE_PADDING;
+      }
+
+      return coords
+        .map(([lng, lat]) => {
+          const x = offsetX + ((lng - minLng) / lngRange) * scaleX;
+          // Flip Y since lat increases upward but SVG Y increases downward
+          const y = offsetY + ((maxLat - lat) / latRange) * scaleY;
+          return `${x},${y}`;
+        })
+        .join(' ');
+    } catch {
+      return null;
+    }
+  }, [trip.geometry, variant]);
+
   const timeOfDayLabel = formatTimeOfDay(trip.timeOfDay);
   const dayTypeLabel = formatDayType(trip.weekday);
   const isDrawer = variant === 'drawer';
+  const modeColor = getModeColor(trip.mode);
 
   return (
     <Pressable
@@ -114,7 +177,7 @@ export function TripHistoryCard({
     >
       <View style={styles.header}>
         <View style={styles.modeContainer}>
-          <View style={[styles.modeIcon, { backgroundColor: getModeColor(trip.mode) }]}>
+          <View style={[styles.modeIcon, { backgroundColor: modeColor }]}>
             <Ionicons name={getModeIcon(trip.mode)} size={20} color={buttonTextColor} />
           </View>
           <View style={styles.headerText}>
@@ -160,7 +223,7 @@ export function TripHistoryCard({
 
       {/* DataRanger stats (if enabled) */}
       {showDataRangerStats && (
-        (trip.featuresRated !== undefined && trip.featuresRated > 0) || 
+        (trip.featuresRated !== undefined && trip.featuresRated > 0) ||
         (trip.segmentsCorrected !== undefined && trip.segmentsCorrected > 0)
       ) && (
         <View style={[styles.dataRangerStats, { borderTopColor: tintColor }]}>
@@ -172,7 +235,7 @@ export function TripHistoryCard({
               </ThemedText>
             </View>
           )}
-          
+
           {trip.segmentsCorrected !== undefined && trip.segmentsCorrected > 0 && (
             <View style={styles.statItem}>
               <Ionicons name="create-outline" size={16} color={tintColor} style={styles.statIcon} />
@@ -181,6 +244,28 @@ export function TripHistoryCard({
               </ThemedText>
             </View>
           )}
+        </View>
+      )}
+
+      {/* Polyline route preview (card variant only) */}
+      {svgPoints && (
+        <View style={styles.polylineContainer}>
+          <Svg
+            width="100%"
+            height={POLYLINE_HEIGHT}
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+          >
+            <SvgPolyline
+              points={svgPoints}
+              fill="none"
+              stroke={modeColor}
+              strokeWidth={2.5}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              opacity={0.6}
+            />
+          </Svg>
         </View>
       )}
     </Pressable>
@@ -234,6 +319,7 @@ const styles = StyleSheet.create({
   },
   dateTime: {
     fontSize: 12,
+    fontFamily: Fonts.regular,
     opacity: 0.7,
   },
   statsContainer: {
@@ -250,6 +336,7 @@ const styles = StyleSheet.create({
   },
   statText: {
     fontSize: 14,
+    fontFamily: Fonts.regular,
   },
   dataRangerStats: {
     flexDirection: 'row',
@@ -259,5 +346,9 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     borderTopWidth: 1,
   },
+  polylineContainer: {
+    marginTop: 12,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
 });
-

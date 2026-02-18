@@ -14,6 +14,7 @@
 
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { mediumImpact } from '@/utils/haptics';
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { StyleSheet, TouchableOpacity } from 'react-native';
@@ -27,6 +28,11 @@ export function RecenterButton({ onPress, position = 'secondary-footer' }: Recen
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
 
+  const handlePress = () => {
+    mediumImpact(); // Medium impact for recenter action
+    onPress();
+  };
+
   return (
     <TouchableOpacity
       style={[
@@ -34,7 +40,7 @@ export function RecenterButton({ onPress, position = 'secondary-footer' }: Recen
         { backgroundColor: colors.background },
         position === 'body' ? styles.bodyPosition : styles.secondaryFooterPosition,
       ]}
-      onPress={onPress}
+      onPress={handlePress}
       activeOpacity={0.7}
     >
       <Ionicons name="locate" size={24} color={colors.tint} />

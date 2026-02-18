@@ -21,6 +21,8 @@ export const Colors = {
     buttonPrimary: '#007AFF',
     buttonDanger: '#FF3B30',
     buttonText: '#FFFFFF',
+    // Text color for buttons with tint background
+    tintButtonText: '#FFFFFF',
   },
   dark: {
     text: '#ECEDEE',
@@ -34,30 +36,72 @@ export const Colors = {
     buttonPrimary: '#007AFF',
     buttonDanger: '#FF3B30',
     buttonText: '#FFFFFF',
+    // Text color for buttons with tint background (black for white tint in dark mode)
+    tintButtonText: '#000000',
   },
 };
 
+/**
+ * Helper function to get the correct text color for buttons with tint background.
+ * In dark mode, tint is white, so we need black text for contrast.
+ * In light mode, tint is a color, so we use white text.
+ * 
+ * @param colorScheme - The current color scheme ('light' or 'dark')
+ * @returns The appropriate text color for tint-background buttons
+ */
+export function getTintButtonTextColor(colorScheme: 'light' | 'dark'): string {
+  return Colors[colorScheme].tintButtonText;
+}
+
 export const Fonts = Platform.select({
   ios: {
-    /** iOS `UIFontDescriptorSystemDesignDefault` */
-    sans: 'system-ui',
-    /** iOS `UIFontDescriptorSystemDesignSerif` */
-    serif: 'ui-serif',
-    /** iOS `UIFontDescriptorSystemDesignRounded` */
-    rounded: 'ui-rounded',
-    /** iOS `UIFontDescriptorSystemDesignMonospaced` */
+    regular: 'Inter_600SemiBold', // Upgraded from 400 to 600 for industrial chic
+    medium: 'Inter_700Bold', // Upgraded from 500 to 700
+    semiBold: 'Inter_800ExtraBold', // Upgraded from 600 to 800
+    bold: 'Inter_900Black', // Upgraded from 700 to 900
+    extraBold: 'Inter_800ExtraBold',
+    black: 'Inter_900Black',
     mono: 'ui-monospace',
   },
+  android: {
+    regular: 'Inter_600SemiBold', // Upgraded from 400 to 600 for industrial chic
+    medium: 'Inter_700Bold', // Upgraded from 500 to 700
+    semiBold: 'Inter_800ExtraBold', // Upgraded from 600 to 800
+    bold: 'Inter_900Black', // Upgraded from 700 to 900
+    extraBold: 'Inter_800ExtraBold',
+    black: 'Inter_900Black',
+    mono: 'monospace',
+  },
   default: {
-    sans: 'normal',
-    serif: 'serif',
-    rounded: 'normal',
+    regular: 'Inter_600SemiBold', // Upgraded from 400 to 600 for industrial chic
+    medium: 'Inter_700Bold', // Upgraded from 500 to 700
+    semiBold: 'Inter_800ExtraBold', // Upgraded from 600 to 800
+    bold: 'Inter_900Black', // Upgraded from 700 to 900
+    extraBold: 'Inter_800ExtraBold',
+    black: 'Inter_900Black',
     mono: 'monospace',
   },
   web: {
-    sans: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-    serif: "Georgia, 'Times New Roman', serif",
-    rounded: "'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif",
+    regular: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
+    medium: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
+    semiBold: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
+    bold: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
+    extraBold: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
+    black: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
     mono: "SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
   },
 });
+
+/**
+ * Font Weight Mapping for Industrial Chic Style
+ * 
+ * For web platform, use these numeric font-weight values with Inter font:
+ * - regular: 600 (SemiBold)
+ * - medium: 700 (Bold)
+ * - semiBold: 800 (ExtraBold)
+ * - bold: 900 (Black)
+ * - extraBold: 800 (ExtraBold)
+ * - black: 900 (Black)
+ * 
+ * This creates a modern, industrial chic aesthetic with heavier, more impactful typography.
+ */

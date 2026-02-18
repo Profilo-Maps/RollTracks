@@ -15,11 +15,16 @@ import SelectModeListComponent from '@/components/SelectModeListComponent';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import TurnstileCaptcha from '@/components/TurnstileCaptcha';
+import { Colors, Fonts } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import { errorNotification, mediumImpact, selectionFeedback } from '@/utils/haptics';
 
 export default function CreateProfileScreen() {
   const { signUp, checkDisplayNameAvailability } = useAuth();
+  const { colorScheme } = useTheme();
+  const colors = Colors[colorScheme];
   const [displayName, setDisplayName] = useState('');
   const [age, setAge] = useState('');
   const [password, setPassword] = useState('');
@@ -74,45 +79,54 @@ export default function CreateProfileScreen() {
     setError('');
 
     if (!displayName.trim()) {
+      errorNotification();
       setError('Please enter a display name.');
       return;
     }
 
     if (displayName.trim().length < 3) {
+      errorNotification();
       setError('Display name must be at least 3 characters.');
       return;
     }
 
     if (displayNameStatus === 'taken') {
+      errorNotification();
       setError('This display name is already taken. Please choose a different one.');
       return;
     }
 
     const ageNum = parseInt(age, 10);
     if (!age.trim() || isNaN(ageNum)) {
+      errorNotification();
       setError('Please enter a valid age.');
       return;
     }
     if (ageNum < 18) {
+      errorNotification();
       setError('You must be at least 18 years old.');
       return;
     }
 
     if (!password) {
+      errorNotification();
       setError('Please enter a password.');
       return;
     }
     if (password !== confirmPassword) {
+      errorNotification();
       setError('Passwords do not match.');
       return;
     }
 
     if (modeList.length === 0) {
+      errorNotification();
       setError('Please select at least one travel mode.');
       return;
     }
 
     if (!captchaToken) {
+      errorNotification();
       setError('Please complete the captcha verification.');
       return;
     }
@@ -139,6 +153,7 @@ export default function CreateProfileScreen() {
       
       // Navigation will happen automatically via AuthContext state change
     } catch (e: any) {
+      errorNotification();
       setError(e.message || 'Registration failed. Please try again.');
     } finally {
       setIsLoading(false);
@@ -247,7 +262,10 @@ export default function CreateProfileScreen() {
               </ThemedView>
               <Switch
                 value={dataRangerMode}
-                onValueChange={setDataRangerMode}
+                onValueChange={(value) => {
+                  selectionFeedback();
+                  setDataRangerMode(value);
+                }}
                 trackColor={{ false: iconColor, true: tintColor }}
                 thumbColor="#fff"
               />
@@ -293,7 +311,10 @@ export default function CreateProfileScreen() {
 
             <TouchableOpacity
               style={[styles.button, { backgroundColor: tintColor }]}
-              onPress={handleSignUp}
+              onPress={() => {
+                mediumImpact();
+                handleSignUp();
+              }}
               disabled={isLoading}
               activeOpacity={0.8}
             >
@@ -301,9 +322,7 @@ export default function CreateProfileScreen() {
                 <ActivityIndicator color="#fff" />
               ) : (
                 <ThemedText
-                  style={styles.buttonText}
-                  lightColor="#fff"
-                  darkColor="#11181C"
+                  style={[styles.buttonText, { color: colors.tintButtonText }]}
                 >
                   Create Account
                 </ThemedText>
@@ -345,7 +364,7 @@ const styles = StyleSheet.create({
   },
   label: {
     marginBottom: 6,
-    fontWeight: '600',
+    fontWeight: '800',
   },
   warning: {
     fontSize: 12,
@@ -373,6 +392,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
+    fontFamily: Fonts.regular,
     marginBottom: 16,
   },
   error: {
@@ -388,7 +408,7 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '800',
   },
   link: {
     marginTop: 20,

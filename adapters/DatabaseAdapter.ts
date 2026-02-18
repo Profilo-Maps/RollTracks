@@ -105,6 +105,7 @@ export interface RatedFeature {
   lat: number;
   long: number;
   timeStamp: string;
+  imageUrl?: string;
 }
 
 export interface CorrectedSegment {
@@ -128,6 +129,7 @@ export interface TripSummary {
   reachedDest?: boolean;
   ratingCount?: number;
   correctionCount?: number;
+  geometry?: string; // Encoded polyline for card preview
 }
 
 export interface IDataService {
@@ -154,11 +156,21 @@ export interface IDataService {
   /** Write a feature rating */
   writeRating(rating: Omit<RatedFeature, 'id'>): Promise<RatedFeature>;
 
+  /** Update an existing rating */
+  updateRating(crisId: string, tripId: string, updates: { userRating: number; imageUrl?: string }): Promise<RatedFeature>;
+
   /** Get all ratings for a specific trip */
   getRatingsForTrip(tripId: string): Promise<RatedFeature[]>;
 
   /** Get all ratings for the current user */
   getUserRatings(): Promise<RatedFeature[]>;
+
+  // --- Image Operations ---
+  /** Upload an image to Supabase Storage and return the public URL */
+  uploadFeatureImage(userId: string, imageUri: string, featureId: string): Promise<string>;
+
+  /** Delete an image from Supabase Storage */
+  deleteFeatureImage(imageUrl: string): Promise<void>;
 
   // --- Correction Operations ---
   /** Write a segment correction */
@@ -173,6 +185,9 @@ export interface IDataService {
   // --- Asset Management ---
   /** Check if local assets need updating (returns last modified timestamp from Supabase) */
   checkAssetUpdates(assetName: 'CurbRamps' | 'Sidewalks'): Promise<string | null>;
+
+  /** Download asset data from Supabase Storage */
+  downloadAsset(assetName: 'CurbRamps' | 'Sidewalks'): Promise<any>;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -181,6 +196,11 @@ export interface IDataService {
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
+
+// Log configuration for debugging (only in development)
+if (__DEV__) {
+  console.log('[DatabaseAdapter] Supabase configured:', supabaseUrl ? 'YES' : 'NO');
+}
 
 const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
@@ -900,7 +920,7 @@ async function _getUserTrips(userId: string): Promise<Trip[]> {
 async function _getTripSummaries(userId: string): Promise<TripSummary[]> {
   const { data: trips, error } = await supabase
     .from('trips')
-    .select('trip_id, mode, purpose, time_of_day, weekday, duration_s, distance_mi, reached_dest')
+    .select('trip_id, mode, purpose, time_of_day, weekday, duration_s, distance_mi, reached_dest, geometry')
     .eq('user_id', userId)
     .eq('status', 'completed')
     .order('trip_id', { ascending: false }); // Order by trip_id (contains timestamp)
@@ -952,6 +972,7 @@ async function _getTripSummaries(userId: string): Promise<TripSummary[]> {
     reachedDest: t.reached_dest,
     ratingCount: ratingsByTrip[t.trip_id] || 0,
     correctionCount: correctionsByTrip[t.trip_id] || 0,
+    geometry: t.geometry,
   }));
 }
 
@@ -984,6 +1005,7 @@ async function _insertRating(rating: Omit<RatedFeature, 'id'>): Promise<RatedFea
       lat: rating.lat,
       long: rating.long,
       time_stamp: rating.timeStamp,
+      image_url: rating.imageUrl ?? null,
     })
     .select()
     .single();
@@ -1002,6 +1024,7 @@ async function _insertRating(rating: Omit<RatedFeature, 'id'>): Promise<RatedFea
     lat: data.lat,
     long: data.long,
     timeStamp: data.time_stamp,
+    imageUrl: data.image_url,
   };
 }
 
@@ -1026,7 +1049,47 @@ async function _getRatingsForTrip(tripId: string): Promise<RatedFeature[]> {
     lat: row.lat,
     long: row.long,
     timeStamp: row.time_stamp,
+    imageUrl: row.image_url,
   }));
+}
+
+async function _updateRating(
+  crisId: string,
+  tripId: string,
+  updates: { userRating: number; imageUrl?: string }
+): Promise<RatedFeature> {
+  const dbUpdates: Record<string, unknown> = {
+    user_rating: updates.userRating,
+  };
+  
+  if (updates.imageUrl !== undefined) {
+    dbUpdates.image_url = updates.imageUrl;
+  }
+
+  const { data, error } = await supabase
+    .from('rated_features')
+    .update(dbUpdates)
+    .eq('cris_id', crisId)
+    .eq('trip_id', tripId)
+    .select()
+    .single();
+
+  if (error || !data) {
+    throw new Error(`Failed to update rating: ${error?.message}`);
+  }
+
+  return {
+    id: data.id,
+    userId: data.user_id,
+    tripId: data.trip_id,
+    crisId: data.cris_id,
+    conditionScore: data.condition_score,
+    userRating: data.user_rating,
+    lat: data.lat,
+    long: data.long,
+    timeStamp: data.time_stamp,
+    imageUrl: data.image_url,
+  };
 }
 
 async function _getUserRatings(userId: string): Promise<RatedFeature[]> {
@@ -1050,7 +1113,84 @@ async function _getUserRatings(userId: string): Promise<RatedFeature[]> {
     lat: row.lat,
     long: row.long,
     timeStamp: row.time_stamp,
+    imageUrl: row.image_url,
   }));
+}
+
+// --- Image Upload ---
+
+/**
+ * Upload an image to Supabase Storage.
+ * Images are stored in the feature-images bucket under user-specific folders.
+ * @param userId - The user ID (used for folder organization)
+ * @param imageUri - Local file URI from expo-image-picker
+ * @param featureId - Unique identifier for the feature (cris_id)
+ * @returns Public URL of the uploaded image
+ */
+async function _uploadFeatureImage(
+  userId: string,
+  imageUri: string,
+  featureId: string,
+): Promise<string> {
+  try {
+    // Generate unique filename with timestamp
+    const timestamp = Date.now();
+    const fileExt = imageUri.split('.').pop() || 'jpg';
+    const fileName = `${userId}/${featureId}_${timestamp}.${fileExt}`;
+
+    // Fetch the image as a blob
+    const response = await fetch(imageUri);
+    const blob = await response.blob();
+
+    // Upload to Supabase Storage
+    const { data, error } = await supabase.storage
+      .from('feature-images')
+      .upload(fileName, blob, {
+        contentType: `image/${fileExt}`,
+        upsert: false,
+      });
+
+    if (error) {
+      throw new Error(`Failed to upload image: ${error.message}`);
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from('feature-images')
+      .getPublicUrl(data.path);
+
+    return urlData.publicUrl;
+  } catch (error) {
+    console.error('[_uploadFeatureImage] Error:', error);
+    throw new Error(`Image upload failed: ${error}`);
+  }
+}
+
+/**
+ * Delete an image from Supabase Storage.
+ * @param imageUrl - Full public URL of the image to delete
+ */
+async function _deleteFeatureImage(imageUrl: string): Promise<void> {
+  try {
+    // Extract the file path from the public URL
+    // URL format: https://<project>.supabase.co/storage/v1/object/public/feature-images/<path>
+    const urlParts = imageUrl.split('/feature-images/');
+    if (urlParts.length !== 2) {
+      throw new Error('Invalid image URL format');
+    }
+    const filePath = urlParts[1];
+
+    const { error } = await supabase.storage
+      .from('feature-images')
+      .remove([filePath]);
+
+    if (error) {
+      throw new Error(`Failed to delete image: ${error.message}`);
+    }
+  } catch (error) {
+    console.error('[_deleteFeatureImage] Error:', error);
+    throw new Error(`Image deletion failed: ${error}`);
+  }
 }
 
 // --- corrected_segments ---
@@ -1139,6 +1279,54 @@ async function _getAssetMetadata(assetName: string): Promise<string | null> {
 
   if (error || !data) return null;
   return data.last_updated;
+}
+
+/**
+ * Download asset data from Supabase Storage.
+ * Assets are stored in the 'dataranger-assets' bucket.
+ */
+async function _downloadAsset(assetName: 'CurbRamps' | 'Sidewalks'): Promise<any> {
+  const fileName = assetName === 'CurbRamps' ? 'curb_ramps.geojson' : 'sidewalks.geojson';
+  
+  try {
+    // Download from Supabase Storage
+    const { data, error } = await supabase.storage
+      .from('dataranger-assets')
+      .download(fileName);
+
+    if (error) {
+      throw new Error(`Failed to download ${fileName}: ${error.message}`);
+    }
+
+    if (!data) {
+      throw new Error(`No data returned for ${fileName}`);
+    }
+
+    // Convert Blob to text and parse JSON
+    // React Native Blob doesn't have .text() method, use FileReader or fetch
+    let text: string;
+    
+    if (typeof data.text === 'function') {
+      // Web/Node environment
+      text = await data.text();
+    } else {
+      // React Native environment - use FileReader
+      text = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsText(data);
+      });
+    }
+    
+    const json = JSON.parse(text);
+
+    console.log(`[DatabaseAdapter] Downloaded ${fileName}: ${(data.size / 1024 / 1024).toFixed(2)} MB`);
+    return json;
+  } catch (error) {
+    console.error(`[DatabaseAdapter] Error downloading ${assetName}:`, error);
+    throw error;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1339,7 +1527,17 @@ export const AuthService: IAuthService = {
       if (!session) return null;
       return _getUserProfile(session.user.id);
     } catch (error) {
-      console.error('Failed to get current user:', error);
+      console.error('[AuthService] Failed to get current user:', error);
+      
+      // Re-throw network errors so AuthContext can handle them
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('Network request failed') || 
+          errorMessage.includes('fetch failed') ||
+          errorMessage.includes('Failed to fetch')) {
+        throw error;
+      }
+      
+      // For other errors, return null (user not logged in)
       return null;
     }
   },
@@ -1455,6 +1653,10 @@ export const DataService: IDataService = {
     return _insertRating(rating);
   },
 
+  async updateRating(crisId, tripId, updates) {
+    return _updateRating(crisId, tripId, updates);
+  },
+
   async getRatingsForTrip(tripId) {
     return _getRatingsForTrip(tripId);
   },
@@ -1481,9 +1683,23 @@ export const DataService: IDataService = {
     return _getUserCorrections(session.user.id);
   },
 
+  // --- Image Operations ---
+
+  async uploadFeatureImage(userId, imageUri, featureId) {
+    return _uploadFeatureImage(userId, imageUri, featureId);
+  },
+
+  async deleteFeatureImage(imageUrl) {
+    return _deleteFeatureImage(imageUrl);
+  },
+
   // --- Asset Management ---
 
   async checkAssetUpdates(assetName) {
     return _getAssetMetadata(assetName);
+  },
+
+  async downloadAsset(assetName) {
+    return _downloadAsset(assetName);
   },
 };

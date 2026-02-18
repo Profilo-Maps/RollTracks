@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "Activate Supabase on Migration Changes",
+  "description": "Automatically activates the Supabase power when migration files are created or edited to provide database management tools",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "supabase/migrations/*.sql"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A Supabase migration file was modified. Activate the supabase-hosted power to access database management tools."
+  }
+}

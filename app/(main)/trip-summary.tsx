@@ -4,14 +4,17 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
 import { Trip } from '@/adapters/DatabaseAdapter';
-import { MapViewComponentRef, PolygonOutline, Polyline } from '@/components/MapViewComponent';
+import { Feature, MapViewComponentRef, PolygonOutline, Polyline } from '@/components/MapViewComponent';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { TripHistoryCard } from '@/components/TripHistoryCard';
+import { useDataRanger } from '@/contexts/DataRangerContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { BasemapLayout } from '@/layouts/BasemapLayout';
+import { DataRangerService } from '@/services/DataRangerService';
 import { HistoryService } from '@/services/HistoryService';
 import { SyncService } from '@/services/SyncService';
+import { mediumImpact } from '@/utils/haptics';
 
 /**
  * Trip Summary Screen
@@ -23,6 +26,13 @@ import { SyncService } from '@/services/SyncService';
  * - Map centered on trip route with appropriate zoom
  * - Back button in header to return to previous screen
  * - Shows cached raw GPS data for unsynced trips (before census block clipping)
+ * - DataRanger Mode: Displays rated and unrated features along the route
+ *   - Queries features within 50m of route points
+ *   - Loads trip ratings to distinguish rated vs unrated features
+ *   - Rated features show with `rated: true` and `userRating` in properties
+ *   - Unrated features show with `rated: false` in properties
+ *   - MapViewComponent can use these properties for visual distinction
+ *   - Features only displayed when DataRanger mode is enabled
  */
 export default function TripSummaryScreen() {
   const { tripId } = useLocalSearchParams<{ tripId: string }>();
@@ -33,11 +43,15 @@ export default function TripSummaryScreen() {
   const [trip, setTrip] = useState<Trip | null>(null);
   const [polyline, setPolyline] = useState<Polyline | null>(null);
   const [blockOutlines, setBlockOutlines] = useState<PolygonOutline[]>([]);
+  const [features, setFeatures] = useState<Feature[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const backgroundColor = useThemeColor({}, 'background');
   const iconColor = useThemeColor({}, 'icon');
+  
+  // DataRanger context
+  const { isDataRangerMode, isReady: isDataRangerReady } = useDataRanger();
 
   // Fetch trip data
   useEffect(() => {
@@ -214,6 +228,76 @@ export default function TripSummaryScreen() {
     loadTripData();
   }, [tripId]);
 
+  // Load features along the route when DataRanger mode is enabled
+  useEffect(() => {
+    const loadFeaturesAlongRoute = async () => {
+      if (!isDataRangerMode || !isDataRangerReady || !polyline || !trip) {
+        setFeatures([]);
+        return;
+      }
+
+      try {
+        console.log('[TripSummaryScreen] Loading features along route...');
+        console.log('[TripSummaryScreen] Trip ID:', trip.tripId);
+        
+        // Load trip ratings into DataRangerService's internal map
+        // This populates the ratedFeatures map so queryNearbyFeatures returns features with rated=true
+        await DataRangerService.loadTripRatings(trip.tripId);
+        
+        console.log('[TripSummaryScreen] Loaded trip ratings into DataRangerService');
+        
+        // Debug: Check what ratings were loaded
+        const ratingsDebug = await DataRangerService.getRatingsForTrip(trip.tripId);
+        console.log('[TripSummaryScreen] DEBUG - Ratings for trip:', ratingsDebug.length);
+        if (ratingsDebug.length > 0) {
+          console.log('[TripSummaryScreen] DEBUG - First rating:', ratingsDebug[0]);
+        }
+        
+        // Sample route points to query features (every 10th point to avoid too many queries)
+        const coordinates = polyline.coordinates;
+        const sampleInterval = Math.max(1, Math.floor(coordinates.length / 50));
+        const encounteredFeatures = new Map<string, Feature>();
+
+        for (let i = 0; i < coordinates.length; i += sampleInterval) {
+          const [lon, lat] = coordinates[i];
+          
+          // Query features within 50m of this point
+          // Features will now have rated=true and userRating set correctly
+          const nearbyFeatures = DataRangerService.queryNearbyFeatures(lat, lon, 50);
+          
+          // Debug: Log first feature to see its properties
+          if (nearbyFeatures.length > 0 && encounteredFeatures.size === 0) {
+            console.log('[TripSummaryScreen] DEBUG - First feature from query:', {
+              id: nearbyFeatures[0].id,
+              rated: nearbyFeatures[0].properties?.rated,
+              userRating: nearbyFeatures[0].properties?.userRating,
+            });
+          }
+          
+          // Add to map to avoid duplicates
+          nearbyFeatures.forEach(feature => {
+            if (!encounteredFeatures.has(feature.id)) {
+              encounteredFeatures.set(feature.id, feature);
+            }
+          });
+        }
+
+        const allFeatures = Array.from(encounteredFeatures.values());
+        setFeatures(allFeatures);
+        
+        const ratedCount = allFeatures.filter(f => f.properties?.rated).length;
+        const unratedCount = allFeatures.length - ratedCount;
+        
+        console.log(`[TripSummaryScreen] Found ${allFeatures.length} features along route`);
+        console.log(`[TripSummaryScreen] Rated: ${ratedCount}, Unrated: ${unratedCount}`);
+      } catch (err) {
+        console.error('[TripSummaryScreen] Failed to load features:', err);
+      }
+    };
+
+    loadFeaturesAlongRoute();
+  }, [isDataRangerMode, isDataRangerReady, polyline, trip]);
+
   // Get color based on transport mode
   const getModeColor = (mode: string): string => {
     const modeColors: Record<string, string> = {
@@ -269,6 +353,7 @@ export default function TripSummaryScreen() {
 
   // Handle back button press
   const handleBack = () => {
+    mediumImpact();
     if (router.canGoBack()) {
       router.back();
     } else {
@@ -299,6 +384,12 @@ export default function TripSummaryScreen() {
     // Already on trip summary, do nothing
   };
 
+  // Handle feature rating submission (read-only mode for trip summary)
+  const handleRatingSubmit = async (params: { feature: Feature; rating: number; imageUri?: string }) => {
+    // This shouldn't be called in read-only mode, but handle it gracefully
+    console.log('[TripSummaryScreen] Rating submission attempted in read-only mode:', params.feature.id);
+  };
+
   // Render footer with trip history card in drawer format
   const renderFooter = () => {
     if (!trip) return null;
@@ -307,7 +398,7 @@ export default function TripSummaryScreen() {
       <TripHistoryCard
         trip={trip}
         onPress={handleTripCardPress}
-        showDataRangerStats={false}
+        showDataRangerStats={isDataRangerMode}
         variant="drawer"
       />
     );
@@ -364,6 +455,9 @@ export default function TripSummaryScreen() {
       ref={mapRef}
       polylines={polyline ? [polyline] : []}
       polygonOutlines={blockOutlines}
+      features={isDataRangerMode ? features : []}
+      featureEncounterTimestamp={trip.endTime || trip.startTime}
+      onRatingSubmit={isDataRangerMode ? handleRatingSubmit : undefined}
       centerPosition={mapBounds?.centerCoordinate}
       zoomLevel={mapBounds?.zoomLevel}
       showUserLocation={false}
@@ -432,6 +526,6 @@ const styles = StyleSheet.create({
   },
   errorButtonText: {
     color: '#FFFFFF',
-    fontWeight: '600',
+    fontWeight: '800',
   },
 });

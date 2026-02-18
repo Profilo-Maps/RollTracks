@@ -10,17 +10,20 @@ import { TripHistoryCard } from '@/components/TripHistoryCard';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useAuth } from '@/contexts/AuthContext';
+import { useMap } from '@/contexts/MapContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { HistoryService } from '@/services/HistoryService';
 import { TripService } from '@/services/TripService';
+import { mediumImpact } from '@/utils/haptics';
 
 /**
  * Trip History Screen
- * Displays a list of completed trips with themed background.
+ * Built with persistent map background (dimmed and frozen).
  *
  * Features:
- * - List of Trip Summary Cards
+ * - List of Trip Summary Cards in body slot
  * - Profile button in header (launches Profile Screen)
+ * - Map displays all completed trips (dimmed)
  * - Empty state for new users with no trips
  * - Checks for orphaned trips on mount and prompts user
  */
@@ -30,6 +33,7 @@ export default function TripHistoryScreen() {
   const buttonTextColor = useThemeColor({}, 'buttonText');
   const errorColor = useThemeColor({}, 'error');
   const { user } = useAuth();
+  const mapContext = useMap();
   const insets = useSafeAreaInsets();
 
   // State
@@ -59,7 +63,7 @@ export default function TripHistoryScreen() {
     checkForOrphanedTrips();
   }, [user]);
 
-  // Fetch trip summaries
+  // Fetch trip summaries and update map
   useEffect(() => {
     const loadTrips = async () => {
       try {
@@ -67,6 +71,41 @@ export default function TripHistoryScreen() {
         setError(null);
         const tripSummaries = await HistoryService.getTripSummaries();
         setTrips(tripSummaries);
+
+        // Fetch full trip data for map display
+        const completedTrips = await HistoryService.getUserTrips({ status: 'completed' });
+        
+        // Convert trips to polylines for map
+        const tripPolylines: Polyline[] = completedTrips
+          .map((trip) => {
+            const coordinates = HistoryService.decodePolyline(trip.geometry);
+            
+            if (coordinates.length === 0) {
+              console.warn('[TripHistoryScreen] Failed to decode polyline for trip:', trip.tripId);
+              return null;
+            }
+            
+            return {
+              id: trip.tripId,
+              coordinates,
+              color: getModeColor(trip.mode),
+              width: 4,
+            };
+          })
+          .filter((polyline): polyline is Polyline => polyline !== null);
+
+        // Calculate map bounds
+        const mapBounds = calculateMapBounds(tripPolylines);
+
+        // Update map context with dimmed state
+        mapContext.updateMapState({
+          polylines: tripPolylines,
+          features: [],
+          centerPosition: mapBounds?.centerCoordinate,
+          zoomLevel: mapBounds?.zoomLevel ?? 15,
+          interactionState: 'dimmed', // Frozen and dimmed
+          showUserLocation: false, // Hide user location on history screen
+        });
       } catch (err) {
         console.error('[TripHistoryScreen] Failed to load trips:', err);
         setError('Failed to load trip history');
@@ -76,15 +115,78 @@ export default function TripHistoryScreen() {
     };
 
     loadTrips();
-  }, []);
+
+    // Cleanup: reset map state when leaving screen
+    return () => {
+      mapContext.updateMapState({
+        interactionState: 'interactive',
+        showUserLocation: true,
+      });
+    };
+  }, [mapContext.updateMapState]);
 
   // Navigate to profile screen
   const handleProfilePress = () => {
+    mediumImpact();
     router.push('/(auth)/profile');
+  };
+
+  // Get color based on transport mode
+  const getModeColor = (mode: string): string => {
+    const modeColors: Record<string, string> = {
+      wheelchair: '#2196F3', // Blue
+      skateboard: '#FF9800', // Orange
+      'assisted walking': '#4CAF50', // Green
+      walking: '#9C27B0', // Purple
+      scooter: '#F44336', // Red
+    };
+    return modeColors[mode.toLowerCase()] ?? '#757575'; // Gray default
+  };
+
+  // Calculate bounding box for all trips
+  const calculateMapBounds = (polylines: Polyline[]): {
+    centerCoordinate: [number, number];
+    zoomLevel: number;
+  } | undefined => {
+    if (polylines.length === 0) return undefined;
+
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+    let minLng = Infinity;
+    let maxLng = -Infinity;
+
+    polylines.forEach((polyline) => {
+      polyline.coordinates.forEach(([lng, lat]) => {
+        minLat = Math.min(minLat, lat);
+        maxLat = Math.max(maxLat, lat);
+        minLng = Math.min(minLng, lng);
+        maxLng = Math.max(maxLng, lng);
+      });
+    });
+
+    const centerLat = (minLat + maxLat) / 2;
+    const centerLng = (minLng + maxLng) / 2;
+
+    // Calculate appropriate zoom level
+    const latDiff = maxLat - minLat;
+    const lngDiff = maxLng - minLng;
+    const maxDiff = Math.max(latDiff, lngDiff);
+
+    let zoomLevel = 15;
+    if (maxDiff > 0.1) zoomLevel = 11;
+    else if (maxDiff > 0.05) zoomLevel = 12;
+    else if (maxDiff > 0.02) zoomLevel = 13;
+    else if (maxDiff > 0.01) zoomLevel = 14;
+
+    return {
+      centerCoordinate: [centerLng, centerLat],
+      zoomLevel,
+    };
   };
 
   // Navigate to trip summary screen
   const handleTripPress = (tripId: string) => {
+    mediumImpact();
     router.push({
       pathname: '/(main)/trip-summary',
       params: { tripId },
@@ -117,7 +219,7 @@ export default function TripHistoryScreen() {
   // Render loading state
   const renderLoading = () => (
     <View style={styles.centerContainer}>
-      <ThemedView style={[styles.messageCard, { backgroundColor }]}>
+      <ThemedView style={styles.messageCard}>
         <ActivityIndicator size="large" color={tintColor} />
         <ThemedText style={styles.messageText}>Loading trips...</ThemedText>
       </ThemedView>
@@ -127,7 +229,7 @@ export default function TripHistoryScreen() {
   // Render error state
   const renderError = () => (
     <View style={styles.centerContainer}>
-      <ThemedView style={[styles.messageCard, { backgroundColor }]}>
+      <ThemedView style={styles.messageCard}>
         <Ionicons name="alert-circle-outline" size={48} color={errorColor} />
         <ThemedText type="subtitle" style={styles.errorTitle}>
           {error}
@@ -159,7 +261,7 @@ export default function TripHistoryScreen() {
   // Render empty state (no trips yet)
   const renderEmptyState = () => (
     <View style={styles.centerContainer}>
-      <ThemedView style={[styles.messageCard, { backgroundColor }]}>
+      <ThemedView style={styles.messageCard}>
         <View style={[styles.emptyIconContainer, { backgroundColor: `${tintColor}20` }]}>
           <Ionicons name="map-outline" size={64} color={tintColor} />
         </View>
@@ -188,7 +290,7 @@ export default function TripHistoryScreen() {
             comfort: 5, // Default comfort, will be in trip data
             purpose: '', // Default purpose, will be in trip data
             status: 'completed' as const,
-            geometry: { type: 'LineString', coordinates: [] }, // Not needed for card display
+            geometry: trip.geometry || '',
             featuresRated: trip.ratingCount,
             segmentsCorrected: trip.correctionCount,
             durationS: trip.durationS || 0,
@@ -219,20 +321,21 @@ export default function TripHistoryScreen() {
   );
 
   return (
-    <ThemedView style={styles.container}>
+    <View style={styles.container}>
       {renderHeader()}
       {renderBody()}
       <BottomNavigationBarComponent
         autoOpenModal={shouldShowOrphanedTripModal}
         onModalVisibilityChange={handleModalVisibilityChange}
       />
-    </ThemedView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: 'transparent', // Allow map to show through
   },
   headerContainer: {
     flexDirection: 'row',
@@ -240,6 +343,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingBottom: 16,
+    backgroundColor: 'transparent',
   },
   headerTitle: {
     flex: 1,
@@ -276,6 +380,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
     maxWidth: 400,
+    opacity: 0.95, // Semi-transparent to show map behind
   },
   messageText: {
     marginTop: 12,
@@ -319,7 +424,7 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   retryButtonText: {
-    fontWeight: '600',
+    fontWeight: '800',
     // Color applied dynamically via inline style
   },
   // Trip list styles

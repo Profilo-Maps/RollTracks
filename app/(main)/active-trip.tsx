@@ -9,10 +9,11 @@
  * - Recenter button in secondary footer slot
  * - When trip ends, navigates to Trip Summary Screen
  * - Integrates with TripService for GPS tracking and SyncService for data persistence
+ * - DataRanger mode: displays nearby curb ramp features and rating modal
  */
 
 import { NativeAdapter } from '@/adapters/NativeAdapter';
-import { MapViewComponentRef, Polyline } from '@/components/MapViewComponent';
+import { Feature, MapViewComponentRef, Polyline } from '@/components/MapViewComponent';
 import { RecenterButton } from '@/components/RecenterButton';
 import { PostTripResult, TripModal } from '@/components/TripModal';
 import { ThemedText } from '@/components/themed-text';
@@ -21,8 +22,10 @@ import { Colors } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { BasemapLayout } from '@/layouts/BasemapLayout';
+import { DataRangerService } from '@/services/DataRangerService';
 import { SyncService } from '@/services/SyncService';
 import { ActiveTripData, TripService } from '@/services/TripService';
+import { mediumImpact, warningNotification } from '@/utils/haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
@@ -69,6 +72,11 @@ export default function ActiveTripScreen() {
   // User location from GPS Adapter
   const [userPosition, setUserPosition] = useState<[number, number] | null>(null);
 
+  // DataRanger state (only active when user.dataRangerMode is true)
+  const isDataRanger = user?.dataRangerMode ?? false;
+  const [nearbyFeatures, setNearbyFeatures] = useState<Feature[]>([]);
+  const [ratedCount, setRatedCount] = useState(0);
+
   // Initialize SyncService on mount
   useEffect(() => {
     SyncService.initialize();
@@ -89,6 +97,16 @@ export default function ActiveTripScreen() {
         console.log('[ActiveTripScreen] Resuming existing trip');
         setTripData(existingTrip);
         setIsPaused(existingTrip.metadata.status === 'paused');
+
+        // Initialize DataRanger for resumed trip
+        // Load all user ratings to show previously rated features
+        if (isDataRanger) {
+          await DataRangerService.initialize();
+          DataRangerService.startTrip(existingTrip.metadata.tripId);
+          await DataRangerService.loadAllUserRatings(user.id);
+          setRatedCount(DataRangerService.getRatedCountForCurrentTrip());
+        }
+
         setIsLoading(false);
         return;
       }
@@ -104,6 +122,14 @@ export default function ActiveTripScreen() {
         // Start trip via TripService
         const tripId = await TripService.startTrip(user.id, mode, comfort, purpose);
         console.log('[ActiveTripScreen] Trip started:', tripId);
+
+        // Initialize DataRanger for new trip
+        // Load all user ratings to show previously rated features
+        if (isDataRanger) {
+          await DataRangerService.initialize();
+          DataRangerService.startTrip(tripId);
+          await DataRangerService.loadAllUserRatings(user.id);
+        }
 
         // Get trip data
         const newTripData = TripService.getCurrentTripData();
@@ -215,6 +241,43 @@ export default function ActiveTripScreen() {
     };
   }, []);
 
+  // DataRanger: query nearby features when user position changes
+  useEffect(() => {
+    if (!isDataRanger || !userPosition || !tripData) return;
+
+    const [lon, lat] = userPosition;
+    const features = DataRangerService.queryNearbyFeatures(lat, lon);
+    setNearbyFeatures(features);
+  }, [userPosition, isDataRanger, tripData]);
+
+  // DataRanger: handle rating submission from callout
+  const handleRatingSubmit = async (params: { feature: Feature; rating: number; imageUri?: string }) => {
+    if (!tripData || !user) return;
+
+    try {
+      // Active trips always have 'active' status - no time window restriction
+      await DataRangerService.rateFeature(
+        params.feature,
+        tripData.metadata.tripId,
+        user.id,
+        params.rating,
+        'active',
+        params.imageUri
+      );
+      
+      setRatedCount(DataRangerService.getRatedCountForCurrentTrip());
+
+      // Re-query to update rated status of markers
+      if (userPosition) {
+        const [lon, lat] = userPosition;
+        setNearbyFeatures(DataRangerService.queryNearbyFeatures(lat, lon));
+      }
+    } catch (error) {
+      console.error('[ActiveTripScreen] Failed to submit rating:', error);
+      Alert.alert('Error', 'Failed to submit rating. Please try again.');
+    }
+  };
+
   // Helper: Calculate distance between two coordinates (Haversine formula)
   const calculateDistance = (
     coord1: { latitude: number; longitude: number },
@@ -256,6 +319,7 @@ export default function ActiveTripScreen() {
 
   // Handle pause/resume
   const handlePauseResume = async () => {
+    mediumImpact();
     try {
       if (isPaused) {
         await TripService.resumeTrip();
@@ -277,6 +341,7 @@ export default function ActiveTripScreen() {
 
   // Handle stop trip - show confirmation, then post-trip survey
   const handleStopTrip = () => {
+    warningNotification();
     Alert.alert(
       'End Trip',
       'Are you sure you want to end this trip?',
@@ -300,6 +365,12 @@ export default function ActiveTripScreen() {
   // Handle post-trip survey completion - end trip with reached_dest and navigate
   const handlePostTripComplete = async (result: PostTripResult) => {
     setShowPostTripModal(false);
+
+    // Clean up DataRanger state
+    if (isDataRanger) {
+      DataRangerService.endTrip();
+      setNearbyFeatures([]);
+    }
 
     try {
       const summary = await TripService.endTrip(result.reachedDest);
@@ -350,6 +421,7 @@ export default function ActiveTripScreen() {
 
   // Handle recenter
   const handleRecenter = () => {
+    mediumImpact();
     mapRef.current?.recenter();
   };
 
@@ -411,7 +483,7 @@ export default function ActiveTripScreen() {
         <View style={styles.modeContainer}>
           <Ionicons
             name={getModeIcon(tripData.metadata.mode)}
-            size={24}
+            size={20}
             color={colors.tint}
           />
           <ThemedText style={styles.modeText}>
@@ -422,7 +494,7 @@ export default function ActiveTripScreen() {
         {/* Trip Stats - Duration and Distance Only */}
         <View style={styles.statsGrid}>
           <View style={styles.statItem}>
-            <Ionicons name="time-outline" size={20} color={colors.icon} />
+            <Ionicons name="time-outline" size={18} color={colors.icon} />
             <ThemedText style={styles.statLabel}>Duration</ThemedText>
             <ThemedText style={styles.statValue}>{formatDuration(duration)}</ThemedText>
           </View>
@@ -430,10 +502,21 @@ export default function ActiveTripScreen() {
           <View style={styles.statDivider} />
 
           <View style={styles.statItem}>
-            <Ionicons name="navigate-outline" size={20} color={colors.icon} />
+            <Ionicons name="navigate-outline" size={18} color={colors.icon} />
             <ThemedText style={styles.statLabel}>Distance</ThemedText>
             <ThemedText style={styles.statValue}>{formatDistance(distance)}</ThemedText>
           </View>
+
+          {isDataRanger && (
+            <>
+              <View style={styles.statDivider} />
+              <View style={styles.statItem}>
+                <Ionicons name="star-outline" size={18} color={colors.icon} />
+                <ThemedText style={styles.statLabel}>Rated</ThemedText>
+                <ThemedText style={styles.statValue}>{ratedCount}</ThemedText>
+              </View>
+            </>
+          )}
         </View>
       </ThemedView>
     </View>
@@ -486,6 +569,8 @@ export default function ActiveTripScreen() {
       <BasemapLayout
         ref={mapRef}
         polylines={[currentPolyline]}
+        features={isDataRanger ? nearbyFeatures : undefined}
+        onRatingSubmit={isDataRanger ? handleRatingSubmit : undefined}
         userPosition={userPosition}
         showUserLocation={true}
         zoomLevel={16}
@@ -524,25 +609,25 @@ const styles = StyleSheet.create({
     // color applied dynamically
   },
   statsCard: {
-    borderRadius: 16,
-    padding: 20,
+    borderRadius: 12,
+    padding: 16,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 8,
-    opacity: 0.97,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 4,
+    opacity: 0.95,
   },
   modeContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    marginBottom: 20,
+    marginBottom: 16,
   },
   modeText: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '700',
   },
   statsGrid: {
     flexDirection: 'row',
@@ -556,16 +641,16 @@ const styles = StyleSheet.create({
   },
   statDivider: {
     width: 1,
-    height: 60,
-    backgroundColor: 'rgba(128, 128, 128, 0.3)',
+    height: 50,
+    backgroundColor: 'rgba(128, 128, 128, 0.2)',
   },
   statLabel: {
-    fontSize: 12,
-    fontWeight: '500',
+    fontSize: 11,
+    fontWeight: '600',
   },
   statValue: {
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 16,
+    fontWeight: '800',
   },
   footerContainer: {
     flexDirection: 'row',
@@ -598,6 +683,6 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '800',
   },
 });

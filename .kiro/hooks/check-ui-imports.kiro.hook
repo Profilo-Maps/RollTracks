@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "name": "Check UI Module Imports",
+  "description": "Verifies all imports are being used correctly after editing UI components and screens",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "components/**/*.tsx",
+      "components/**/*.ts",
+      "app/**/*.tsx"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Check the edited file for unused imports or missing import statements. Run diagnostics to verify all imports are correct."
+  }
+}

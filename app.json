@@ -13,7 +13,9 @@
       "bundleIdentifier": "com.rolltracks.app",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "RollTracks needs your location to record your trips and display your route on the map.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "RollTracks needs your location to record your trips and display your route on the map."
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "RollTracks needs your location to record your trips and display your route on the map.",
+        "NSCameraUsageDescription": "RollTracks needs access to your camera to take photos of curb ramps and accessibility features.",
+        "NSPhotoLibraryUsageDescription": "RollTracks needs access to your photo library to upload images of curb ramps and accessibility features."
       }
     },
     "android": {
@@ -28,7 +30,11 @@
       "package": "com.rolltracks.app",
       "permissions": [
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
       ],
       "config": {
         "googleMaps": {
@@ -45,7 +51,8 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "bundler": "metro"
     },
     "plugins": [
       "expo-router",
@@ -61,7 +68,14 @@
           }
         }
       ],
-      "@rnmapbox/maps"
+      "@rnmapbox/maps",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "RollTracks needs access to your photo library to upload images of curb ramps and accessibility features.",
+          "cameraPermission": "RollTracks needs access to your camera to take photos of curb ramps and accessibility features."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

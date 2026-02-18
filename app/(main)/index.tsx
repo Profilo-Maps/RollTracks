@@ -1,19 +1,19 @@
 import { Trip } from '@/adapters/DatabaseAdapter';
-import { NativeAdapter } from '@/adapters/NativeAdapter';
 import { BottomNavigationBarComponent } from '@/components/BottomNavigationBarComponent';
-import { Feature, MapViewComponentRef, Polyline } from '@/components/MapViewComponent';
+import { Polyline } from '@/components/MapViewComponent';
 import { RecenterButton } from '@/components/RecenterButton';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useAuth } from '@/contexts/AuthContext';
+import { useMap } from '@/contexts/MapContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { BasemapLayout } from '@/layouts/BasemapLayout';
 import { HistoryService } from '@/services/HistoryService';
 import { TripService } from '@/services/TripService';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 /**
@@ -32,7 +32,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 export default function HomeScreen() {
   const { user } = useAuth();
   const router = useRouter();
-  const mapRef = useRef<MapViewComponentRef>(null);
+  const mapContext = useMap();
   const insets = useSafeAreaInsets();
 
   // Theme colors
@@ -41,13 +41,8 @@ export default function HomeScreen() {
 
   // State for trip data
   const [trips, setTrips] = useState<Trip[]>([]);
-  const [polylines, setPolylines] = useState<Polyline[]>([]);
-  const [features, setFeatures] = useState<Feature[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  // State for user location from GPS Adapter
-  const [userPosition, setUserPosition] = useState<[number, number] | null>(null);
 
   // State for orphaned trip modal
   const [shouldShowOrphanedTripModal, setShouldShowOrphanedTripModal] = useState(false);
@@ -71,44 +66,7 @@ export default function HomeScreen() {
     checkForOrphanedTrips();
   }, [user]);
 
-  // Get user's current location from GPS Adapter and update periodically
-  useEffect(() => {
-    let isSubscribed = true;
-
-    const updateUserLocation = async () => {
-      try {
-        // Check if permissions are granted
-        const { granted } = await NativeAdapter.checkPermissions();
-        if (!granted) {
-          console.log('[HomeScreen] GPS permissions not granted, skipping location update');
-          return;
-        }
-
-        // Get current position
-        const position = await NativeAdapter.getCurrentPosition();
-        if (isSubscribed) {
-          setUserPosition([position.longitude, position.latitude]);
-          console.log('[HomeScreen] User position updated:', position.latitude, position.longitude);
-        }
-      } catch (error) {
-        console.error('[HomeScreen] Failed to get user position:', error);
-        // Don't set error state - just log it
-      }
-    };
-
-    // Get initial position
-    updateUserLocation();
-
-    // Update position every 10 seconds
-    const intervalId = setInterval(updateUserLocation, 10000);
-
-    return () => {
-      isSubscribed = false;
-      clearInterval(intervalId);
-    };
-  }, []);
-
-  // Fetch trip data and convert to polylines for map display
+  // Fetch trip data and update map context
   useEffect(() => {
     const loadTripData = async () => {
       try {
@@ -138,11 +96,19 @@ export default function HomeScreen() {
             };
           })
           .filter((polyline): polyline is Polyline => polyline !== null);
-        
-        setPolylines(tripPolylines);
 
-        // Clear features (DataRanger functionality removed)
-        setFeatures([]);
+        // Calculate map bounds for trips
+        const mapBounds = calculateMapBounds(tripPolylines);
+
+        // Update map context with trip data
+        mapContext.updateMapState({
+          polylines: tripPolylines,
+          features: [],
+          centerPosition: mapBounds?.centerCoordinate,
+          zoomLevel: mapBounds?.zoomLevel ?? 15,
+          interactionState: 'interactive',
+          showUserLocation: true,
+        });
       } catch (err) {
         console.error('[HomeScreen] Failed to load trip data:', err);
         setError('Failed to load trip data');
@@ -152,7 +118,7 @@ export default function HomeScreen() {
     };
 
     loadTripData();
-  }, []);
+  }, [mapContext]);
 
   // Get color based on transport mode
   const getModeColor = (mode: string): string => {
@@ -167,12 +133,11 @@ export default function HomeScreen() {
   };
 
   // Calculate bounding box for all trips to set initial map view
-  // If no trips, return undefined so map uses userPosition
-  const calculateMapBounds = (): {
+  const calculateMapBounds = (polylines: Polyline[]): {
     centerCoordinate: [number, number];
     zoomLevel: number;
   } | undefined => {
-    if (polylines.length === 0) return undefined; // Let map use userPosition
+    if (polylines.length === 0) return undefined;
 
     let minLat = Infinity;
     let maxLat = -Infinity;
@@ -209,16 +174,16 @@ export default function HomeScreen() {
     };
   };
 
-  const mapBounds = calculateMapBounds();
-
   // Navigate to profile screen
   const handleProfilePress = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     router.push('/(auth)/profile');
   };
 
   // Handle recenter button press
   const handleRecenter = () => {
-    mapRef.current?.recenter();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    mapContext.recenterToUser();
   };
 
   // Handle orphaned trip modal visibility changes
@@ -257,56 +222,29 @@ export default function HomeScreen() {
     />
   );
 
-  // Render loading state
-  if (isLoading) {
-    return (
-      <BasemapLayout
-        userPosition={userPosition}
-        showUserLocation={true}
-        header={renderHeader()}
-        footer={renderFooter()}
-        secondaryFooter={renderSecondaryFooter()}
-      >
-        <View style={styles.centerContainer}>
-          <ThemedView style={styles.loadingCard}>
-            <ActivityIndicator size="large" />
-            <ThemedText style={styles.loadingText}>Loading your trips...</ThemedText>
-          </ThemedView>
-        </View>
-      </BasemapLayout>
-    );
-  }
-
   // Render error state
   if (error) {
     return (
-      <BasemapLayout
-        userPosition={userPosition}
-        showUserLocation={true}
-        header={renderHeader()}
-        footer={renderFooter()}
-        secondaryFooter={renderSecondaryFooter()}
-      >
+      <View style={styles.container}>
+        {renderHeader()}
         <View style={styles.centerContainer}>
           <ThemedView style={styles.errorCard}>
             <ThemedText type="subtitle">Error</ThemedText>
             <ThemedText>{error}</ThemedText>
           </ThemedView>
         </View>
-      </BasemapLayout>
+        <View style={styles.spacer} />
+        {renderSecondaryFooter()}
+        {renderFooter()}
+      </View>
     );
   }
 
   // Render empty state (no trips yet)
   if (trips.length === 0) {
     return (
-      <BasemapLayout
-        userPosition={userPosition}
-        showUserLocation={true}
-        header={renderHeader()}
-        footer={renderFooter()}
-        secondaryFooter={renderSecondaryFooter()}
-      >
+      <View style={styles.container}>
+        {renderHeader()}
         <View style={styles.centerContainer}>
           <ThemedView style={styles.welcomeCard}>
             <ThemedText type="subtitle">Welcome to RollTracks</ThemedText>
@@ -318,28 +256,32 @@ export default function HomeScreen() {
             </ThemedText>
           </ThemedView>
         </View>
-      </BasemapLayout>
+        <View style={styles.spacer} />
+        {renderSecondaryFooter()}
+        {renderFooter()}
+      </View>
     );
   }
 
-  // Render main map view with trips
+  // Render main view with trips displayed on map
   return (
-    <BasemapLayout
-      ref={mapRef}
-      polylines={polylines}
-      features={features}
-      centerPosition={mapBounds?.centerCoordinate}
-      zoomLevel={mapBounds?.zoomLevel}
-      userPosition={userPosition}
-      showUserLocation={true}
-      header={renderHeader()}
-      footer={renderFooter()}
-      secondaryFooter={renderSecondaryFooter()}
-    />
+    <View style={styles.container}>
+      {renderHeader()}
+      <View style={styles.spacer} />
+      {renderSecondaryFooter()}
+      {renderFooter()}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'space-between',
+  },
+  spacer: {
+    flex: 1,
+  },
   headerContainer: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
