@@ -45,6 +45,7 @@ app-example
 
 #build prompts
 /prompts
+/.kiro
 
 # Accessibility checker results
 results/

@@ -1,8 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import argon2 from '@sphereon/react-native-argon2';
 import { createClient, Session, SupabaseClient } from '@supabase/supabase-js';
 import Constants from 'expo-constants';
 import * as Crypto from 'expo-crypto';
+import argon2 from '@sphereon/react-native-argon2';
 import { Platform } from 'react-native';
 
 // ═══════════════════════════════════════════════════════════
@@ -118,6 +118,20 @@ export interface CorrectedSegment {
   timeStamp: string;
 }
 
+export interface FeatureEdit {
+  id?: string;
+  userId: string;
+  tripId: string;
+  streetGridId: string;
+  editType: 'rating' | 'attribute_correction' | 'geometry_correction';
+  attributes?: Record<string, unknown>;
+  userRating?: number;
+  geometry?: GeoJSON.Geometry;
+  coord: [number, number]; // [longitude, latitude]
+  featureType: 'point' | 'line';
+  createdAt?: string;
+}
+
 export interface TripSummary {
   tripId: string;
   mode: string;
@@ -152,6 +166,9 @@ export interface IDataService {
   /** Delete a trip and all associated ratings/corrections */
   deleteTrip(tripId: string): Promise<void>;
 
+  /** Return the census block (geoid + GeoJSON polygon) that contains the given WGS-84 point, or null if outside coverage */
+  getBlockForPoint(lon: number, lat: number): Promise<{ geoid: string; polygon: GeoJSON.Polygon } | null>;
+
   // --- Rating Operations ---
   /** Write a feature rating */
   writeRating(rating: Omit<RatedFeature, 'id'>): Promise<RatedFeature>;
@@ -182,12 +199,59 @@ export interface IDataService {
   /** Get all corrections for the current user */
   getUserCorrections(): Promise<CorrectedSegment[]>;
 
+  // --- Segment Edit Operations ---
+  /** Write a segment attribute edit */
+  writeSegmentEdit(edit: { tripId: string; userId: string; streetGridId: string; facilityType: string; fieldName: string; oldValue: string | null; newValue: string }): Promise<void>;
+
+  /** Get edits for a specific trip */
+  getSegmentEditsForTrip(tripId: string): Promise<{ streetGridId: string; facilityType: string; fieldName: string; oldValue: string | null; newValue: string; createdAt: string }[]>;
+
+  /** Get all edits by the current user */
+  getUserSegmentEdits(): Promise<{ streetGridId: string; facilityType: string; fieldName: string; oldValue: string | null; newValue: string; createdAt: string }[]>;
+
+  // --- Geometry Edit Operations ---
+  /** Write a geometry edit (topology-altering operation) */
+  writeGeometryEdit(edit: {
+    tripId: string; userId: string; editType: string; streetGridId?: string;
+    payload: Record<string, unknown>; coord: [number, number];
+  }): Promise<{ id: string }>;
+
+  /** Get geometry edits for a specific trip */
+  getGeometryEditsForTrip(tripId: string): Promise<{
+    id: string; editType: string; streetGridId?: string;
+    payload: Record<string, unknown>; coord: [number, number];
+    status: string; createdAt: string;
+  }[]>;
+
+  /** Get all geometry edits by the current user */
+  getUserGeometryEdits(): Promise<{
+    id: string; editType: string; streetGridId?: string;
+    payload: Record<string, unknown>; coord: [number, number];
+    status: string; createdAt: string;
+  }[]>;
+
+  /** Get status updates for a list of geometry edit IDs */
+  getGeometryEditStatuses(editIds: string[]): Promise<{ id: string; status: string }[]>;
+
+  // --- Feature Edit Operations (unified table) ---
+  /** Write a feature edit (rating, attribute correction, or geometry correction) */
+  writeFeatureEdit(edit: Omit<FeatureEdit, 'id' | 'createdAt'>): Promise<FeatureEdit>;
+
+  /** Get all feature edits for a specific trip */
+  getFeatureEditsForTrip(tripId: string): Promise<FeatureEdit[]>;
+
+  /** Get all feature edits by the current user */
+  getUserFeatureEdits(): Promise<FeatureEdit[]>;
+
+  /** Update an existing feature edit (e.g., change rating or attributes) */
+  updateFeatureEdit(editId: string, updates: Partial<Pick<FeatureEdit, 'attributes' | 'userRating' | 'geometry'>>): Promise<FeatureEdit>;
+
   // --- Asset Management ---
   /** Check if local assets need updating (returns last modified timestamp from Supabase) */
-  checkAssetUpdates(assetName: 'CurbRamps' | 'Sidewalks'): Promise<string | null>;
+  checkAssetUpdates(assetName: 'ProximityNetwork'): Promise<string | null>;
 
-  /** Download asset data from Supabase Storage */
-  downloadAsset(assetName: 'CurbRamps' | 'Sidewalks'): Promise<any>;
+  /** Download proximity network parquet as ArrayBuffer */
+  downloadProximityAsset(): Promise<ArrayBuffer>;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -220,101 +284,81 @@ const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
 // --- Utilities ---
 
 /**
- * Hash a password using Argon2id (recommended for password hashing).
- * Argon2id is the winner of the Password Hashing Competition and provides
- * better security than bcrypt against GPU/ASIC attacks.
- *
- * Configuration:
- * - type: argon2id (hybrid mode, resistant to both side-channel and GPU attacks)
- * - memoryCost: 65536 (64 MiB) - balanced for mobile devices
- * - timeCost: 3 iterations - provides good security without impacting UX
+ * Hash a password using Argon2id.
+ * The library generates its own salt internally.
+ * Format: $argon2id$v=19$m=65536,t=3,p=4$<base64-salt>$<base64-hash>
+ * Parameters optimized for mobile devices:
+ * - memory: 65536 KiB (64 MiB)
+ * - time: 3 iterations
  * - parallelism: 4 threads
- *
- * Uses @sphereon/react-native-argon2 which provides native implementations:
- * - Android: argon2kt (official Argon2 C library binding)
- * - iOS: CatCrypto (Swift wrapper around official Argon2)
  */
 async function _hashPassword(password: string): Promise<string> {
   if (!password || typeof password !== 'string') {
-    throw new Error(`Invalid password provided for hashing: ${typeof password}, value: ${password}`);
+    throw new Error(`Invalid password provided for hashing: ${typeof password}`);
   }
 
-  console.log('[_hashPassword] Input:', { type: typeof password, length: password.length });
-
   try {
-    // Generate a random salt using expo-crypto (cryptographically secure)
-    const saltBytes = await Crypto.getRandomBytesAsync(32); // 32 bytes for hex string
-    const salt = Array.from(saltBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    // Generate random 32-byte salt as hex string (64 chars).
+    // The native Android bridge requires >= 32 bytes after BigInteger parsing,
+    // so we must provide 64 hex chars (32 bytes).
+    const saltBytes = await Crypto.getRandomBytesAsync(32);
+    let saltHex = '';
+    const saltBytesArray = Array.from(saltBytes as any);
+    for (const byte of saltBytesArray) {
+      saltHex += ('0' + (byte as number).toString(16)).slice(-2);
+    }
 
-    const result = await argon2(password, salt, {
-      hashLength: 32,
-      memory: 65536, // 64 MiB
-      parallelism: 4,
+    // Hash with Argon2id configuration
+    const result = await argon2(password, saltHex, {
       mode: 'argon2id',
       iterations: 3,
+      memory: 65536,
+      parallelism: 4,
+      hashLength: 32,
     });
 
-    console.log('[_hashPassword] Success:', { encodedLength: result.encodedHash.length });
-    return result.encodedHash; // Returns the full encoded hash with salt and parameters
+    return result.encodedHash;
   } catch (error) {
     console.error('[_hashPassword] Error:', error);
-    throw new Error(`Password hashing failed: ${error}`);
+    throw new Error(`Failed to hash password: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
 /**
- * Compare a plaintext password against an Argon2 hash.
- * Parses the encoded hash to extract salt and parameters, then hashes the input
- * password with the same parameters and compares the results.
- * Also checks for legacy bcrypt hashes and rejects them.
+ * Verify a password against an Argon2id hash.
+ * Extracts salt from the encoded hash and re-hashes for comparison.
  */
 async function _verifyPassword(password: string, hash: string): Promise<boolean> {
   try {
-    // Check if it's an Argon2 hash (starts with $argon2)
-    if (hash.startsWith('$argon2')) {
-      // Parse the encoded hash format: $argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>
-      const parts = hash.split('$');
-      if (parts.length < 6) {
-        console.error('[_verifyPassword] Invalid Argon2 hash format');
-        return false;
-      }
-
-      // Extract parameters from the encoded hash
-      const mode = parts[1] as 'argon2d' | 'argon2i' | 'argon2id';
-      const paramsStr = parts[3]; // "m=65536,t=3,p=4"
-      const saltBase64 = parts[4];
-
-      // Parse parameters
-      const params = paramsStr.split(',').reduce((acc, param) => {
-        const [key, value] = param.split('=');
-        acc[key] = parseInt(value, 10);
-        return acc;
-      }, {} as Record<string, number>);
-
-      // Decode base64 salt to hex string
-      const saltBytes = Uint8Array.from(atob(saltBase64), c => c.charCodeAt(0));
-      const salt = Array.from(saltBytes).map(b => b.toString(16).padStart(2, '0')).join('');
-
-      // Hash the input password with the same parameters
-      const result = await argon2(password, salt, {
-        hashLength: 32, // Standard length
-        memory: params.m,
-        parallelism: params.p,
-        mode: mode,
-        iterations: params.t,
-      });
-
-      // Compare the encoded hashes
-      return result.encodedHash === hash;
+    if (!hash.startsWith('$argon2')) {
+      console.warn('[_verifyPassword] Hash does not start with $argon2');
+      return false;
     }
 
-    // Legacy bcrypt support - if you need to support old hashes during migration
-    // Remove this block after all users have migrated
-    if (hash.startsWith('$2a$') || hash.startsWith('$2b$') || hash.startsWith('$2y$')) {
-      throw new Error('Legacy bcrypt hashes are no longer supported. Please reset your password.');
+    // Parse the encoded hash to extract salt
+    // Format: $argon2id$v=19$m=65536,t=3,p=4$<base64-salt>$<base64-hash>
+    const parts = hash.split('$');
+    if (parts.length < 5) {
+      console.warn('[_verifyPassword] Invalid hash format');
+      return false;
     }
 
-    return false;
+    const saltBase64 = parts[4]; // Base64-encoded salt from hash
+
+    // Decode base64 to get the original hex salt string that was used for hashing
+    const saltHex = atob(saltBase64);
+
+    // Re-hash with the same salt and parameters
+    const result = await argon2(password, saltHex, {
+      mode: 'argon2id',
+      iterations: 3,
+      memory: 65536,
+      parallelism: 4,
+      hashLength: 32,
+    });
+
+    // Compare the full encoded hashes
+    return result.encodedHash === hash;
   } catch (error) {
     console.error('[_verifyPassword] Error:', error);
     return false;
@@ -732,6 +776,7 @@ async function _insertTrip(
       reached_dest: tripData.reachedDest ?? null,
       geometry: tripData.geometry, // Store as encoded polyline string
       relative_times: tripData.relativeTimes ?? null,
+      od_geoids: tripData.odGeoids ?? null,
       device_platform: tripData.devicePlatform,
       device_os_version: tripData.deviceOsVersion,
       app_version: tripData.appVersion,
@@ -1268,6 +1313,284 @@ async function _getUserCorrections(userId: string): Promise<CorrectedSegment[]> 
   }));
 }
 
+// --- Segment Edit Operations ---
+
+async function _writeSegmentEdit(edit: {
+  tripId: string; userId: string; streetGridId: string;
+  facilityType: string; fieldName: string; oldValue: string | null; newValue: string;
+}): Promise<void> {
+  const { error } = await supabase
+    .from('segment_edits')
+    .insert({
+      user_id: edit.userId,
+      trip_id: edit.tripId,
+      street_grid_id: edit.streetGridId,
+      facility_type: edit.facilityType,
+      field_name: edit.fieldName,
+      old_value: edit.oldValue,
+      new_value: edit.newValue,
+    });
+
+  if (error) {
+    throw new Error(`Failed to write segment edit: ${error.message}`);
+  }
+}
+
+async function _getSegmentEditsForTrip(tripId: string) {
+  const { data, error } = await supabase
+    .from('segment_edits')
+    .select('*')
+    .eq('trip_id', tripId)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to fetch segment edits for trip: ${error.message}`);
+  }
+
+  return (data || []).map((row: any) => ({
+    streetGridId: row.street_grid_id,
+    facilityType: row.facility_type,
+    fieldName: row.field_name,
+    oldValue: row.old_value,
+    newValue: row.new_value,
+    createdAt: row.created_at,
+  }));
+}
+
+async function _getUserSegmentEdits(userId: string) {
+  const { data, error } = await supabase
+    .from('segment_edits')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    throw new Error(`Failed to fetch user segment edits: ${error.message}`);
+  }
+
+  return (data || []).map((row: any) => ({
+    streetGridId: row.street_grid_id,
+    facilityType: row.facility_type,
+    fieldName: row.field_name,
+    oldValue: row.old_value,
+    newValue: row.new_value,
+    createdAt: row.created_at,
+  }));
+}
+
+// --- Geometry Edit Operations ---
+
+async function _writeGeometryEdit(edit: {
+  tripId: string; userId: string; editType: string; streetGridId?: string;
+  payload: Record<string, unknown>; coord: [number, number];
+}): Promise<{ id: string }> {
+  const { data, error } = await supabase
+    .from('geometry_edits')
+    .insert({
+      user_id: edit.userId,
+      trip_id: edit.tripId,
+      edit_type: edit.editType,
+      street_grid_id: edit.streetGridId ?? null,
+      payload: edit.payload,
+      coord: `POINT(${edit.coord[0]} ${edit.coord[1]})`,
+    })
+    .select('id')
+    .single();
+
+  if (error || !data) {
+    throw new Error(`Failed to write geometry edit: ${error?.message}`);
+  }
+
+  return { id: data.id };
+}
+
+function _mapGeometryEditRow(row: any) {
+  return {
+    id: row.id,
+    editType: row.edit_type,
+    streetGridId: row.street_grid_id ?? undefined,
+    payload: row.payload,
+    coord: row.coord?.coordinates ?? [0, 0],
+    status: row.status,
+    createdAt: row.created_at,
+  };
+}
+
+async function _getGeometryEditsForTrip(tripId: string) {
+  const { data, error } = await supabase
+    .from('geometry_edits')
+    .select('*')
+    .eq('trip_id', tripId)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to fetch geometry edits for trip: ${error.message}`);
+  }
+
+  return (data || []).map(_mapGeometryEditRow);
+}
+
+async function _getUserGeometryEdits(userId: string) {
+  const { data, error } = await supabase
+    .from('geometry_edits')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    throw new Error(`Failed to fetch user geometry edits: ${error.message}`);
+  }
+
+  return (data || []).map(_mapGeometryEditRow);
+}
+
+async function _getGeometryEditStatuses(editIds: string[]): Promise<{ id: string; status: string }[]> {
+  if (editIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('geometry_edits')
+    .select('id, status')
+    .in('id', editIds);
+
+  if (error) {
+    throw new Error(`Failed to fetch geometry edit statuses: ${error.message}`);
+  }
+
+  return (data || []).map((row: any) => ({ id: row.id, status: row.status }));
+}
+
+// --- Feature Edit Operations ---
+
+async function _supaWriteFeatureEdit(edit: Omit<FeatureEdit, 'id' | 'createdAt'>): Promise<FeatureEdit> {
+  const { data, error } = await supabase
+    .from('feature_edits')
+    .insert({
+      user_id: edit.userId,
+      trip_id: edit.tripId,
+      street_grid_id: edit.streetGridId,
+      edit_type: edit.editType,
+      attributes: edit.attributes || {},
+      user_rating: edit.userRating || null,
+      geometry: edit.geometry ? JSON.stringify(edit.geometry) : null,
+      coord: `POINT(${edit.coord[0]} ${edit.coord[1]})`,
+      feature_type: edit.featureType,
+    })
+    .select()
+    .single();
+
+  if (error) throw new Error(`Failed to write feature edit: ${error.message}`);
+  return _mapFeatureEditRow(data);
+}
+
+async function _supaGetFeatureEditsForTrip(tripId: string): Promise<FeatureEdit[]> {
+  const { data, error } = await supabase
+    .from('feature_edits')
+    .select('*')
+    .eq('trip_id', tripId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new Error(`Failed to get feature edits: ${error.message}`);
+  return (data || []).map(_mapFeatureEditRow);
+}
+
+async function _supaGetUserFeatureEdits(): Promise<FeatureEdit[]> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user) throw new Error('Not authenticated');
+
+  const { data, error } = await supabase
+    .from('feature_edits')
+    .select('*')
+    .eq('user_id', session.user.id)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new Error(`Failed to get user feature edits: ${error.message}`);
+  return (data || []).map(_mapFeatureEditRow);
+}
+
+async function _supaUpdateFeatureEdit(
+  editId: string,
+  updates: Partial<Pick<FeatureEdit, 'attributes' | 'userRating' | 'geometry'>>,
+): Promise<FeatureEdit> {
+  const updateObj: Record<string, unknown> = {};
+  if (updates.attributes !== undefined) updateObj.attributes = updates.attributes;
+  if (updates.userRating !== undefined) updateObj.user_rating = updates.userRating;
+  if (updates.geometry !== undefined) updateObj.geometry = JSON.stringify(updates.geometry);
+
+  const { data, error } = await supabase
+    .from('feature_edits')
+    .update(updateObj)
+    .eq('id', editId)
+    .select()
+    .single();
+
+  if (error) throw new Error(`Failed to update feature edit: ${error.message}`);
+  return _mapFeatureEditRow(data);
+}
+
+function _mapFeatureEditRow(row: any): FeatureEdit {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    tripId: row.trip_id,
+    streetGridId: row.street_grid_id,
+    editType: row.edit_type,
+    attributes: row.attributes || {},
+    userRating: row.user_rating ?? undefined,
+    geometry: row.geometry ? (typeof row.geometry === 'string' ? JSON.parse(row.geometry) : row.geometry) : undefined,
+    coord: _parsePointCoord(row.coord),
+    featureType: row.feature_type,
+    createdAt: row.created_at,
+  };
+}
+
+function _parsePointCoord(coord: any): [number, number] {
+  if (!coord) return [0, 0];
+  // PostGIS returns WKT like "POINT(lng lat)" or GeoJSON
+  if (typeof coord === 'string') {
+    const match = coord.match(/POINT\(([-\d.]+)\s+([-\d.]+)\)/);
+    if (match) return [parseFloat(match[1]), parseFloat(match[2])];
+  }
+  if (coord.coordinates) return coord.coordinates;
+  return [0, 0];
+}
+
+/**
+ * Download proximity network parquet as raw ArrayBuffer.
+ * The parquet is stored in the 'dataranger-assets' bucket.
+ */
+async function _downloadProximityAsset(): Promise<ArrayBuffer> {
+  const fileName = 'San_Francisco_County_California_USA_network.parquet';
+
+  const { data, error } = await supabase.storage
+    .from('dataranger-assets')
+    .download(fileName);
+
+  if (error) {
+    throw new Error(`Failed to download proximity parquet: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new Error('No data returned for proximity parquet');
+  }
+
+  // Convert Blob to ArrayBuffer
+  let buffer: ArrayBuffer;
+  if (typeof data.arrayBuffer === 'function') {
+    buffer = await data.arrayBuffer();
+  } else {
+    // React Native fallback
+    buffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as ArrayBuffer);
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(data);
+    });
+  }
+
+  console.log(`[DatabaseAdapter] Downloaded proximity parquet: ${(buffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
+  return buffer;
+}
+
 // --- asset_metadata (optional table for tracking asset versions) ---
 
 async function _getAssetMetadata(assetName: string): Promise<string | null> {
@@ -1281,53 +1604,6 @@ async function _getAssetMetadata(assetName: string): Promise<string | null> {
   return data.last_updated;
 }
 
-/**
- * Download asset data from Supabase Storage.
- * Assets are stored in the 'dataranger-assets' bucket.
- */
-async function _downloadAsset(assetName: 'CurbRamps' | 'Sidewalks'): Promise<any> {
-  const fileName = assetName === 'CurbRamps' ? 'curb_ramps.geojson' : 'sidewalks.geojson';
-  
-  try {
-    // Download from Supabase Storage
-    const { data, error } = await supabase.storage
-      .from('dataranger-assets')
-      .download(fileName);
-
-    if (error) {
-      throw new Error(`Failed to download ${fileName}: ${error.message}`);
-    }
-
-    if (!data) {
-      throw new Error(`No data returned for ${fileName}`);
-    }
-
-    // Convert Blob to text and parse JSON
-    // React Native Blob doesn't have .text() method, use FileReader or fetch
-    let text: string;
-    
-    if (typeof data.text === 'function') {
-      // Web/Node environment
-      text = await data.text();
-    } else {
-      // React Native environment - use FileReader
-      text = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsText(data);
-      });
-    }
-    
-    const json = JSON.parse(text);
-
-    console.log(`[DatabaseAdapter] Downloaded ${fileName}: ${(data.size / 1024 / 1024).toFixed(2)} MB`);
-    return json;
-  } catch (error) {
-    console.error(`[DatabaseAdapter] Error downloading ${assetName}:`, error);
-    throw error;
-  }
-}
 
 // ═══════════════════════════════════════════════════════════
 // AUTH SERVICE MODULE (Public API)
@@ -1385,7 +1661,6 @@ export const AuthService: IAuthService = {
     const userId = session.user.id;
 
     // 2. Hash the password using Argon2id
-    console.log('About to hash password, type:', typeof password, 'value:', password);
     const passwordHash = await _hashPassword(password);
 
     // 3. Create user profile
@@ -1647,6 +1922,14 @@ export const DataService: IDataService = {
     return _deleteTrip(tripId);
   },
 
+  async getBlockForPoint(lon, lat) {
+    const { data, error } = await supabase.rpc('get_census_block_for_point', { lon, lat });
+    if (error || !data || data.length === 0) return null;
+    const row = data[0];
+    if (!row.geoid20 || !row.geom) return null;
+    return { geoid: row.geoid20, polygon: row.geom as GeoJSON.Polygon };
+  },
+
   // --- Rating Operations ---
 
   async writeRating(rating) {
@@ -1699,7 +1982,50 @@ export const DataService: IDataService = {
     return _getAssetMetadata(assetName);
   },
 
-  async downloadAsset(assetName) {
-    return _downloadAsset(assetName);
+  async downloadProximityAsset() {
+    return _downloadProximityAsset();
   },
+
+  // --- Geometry Edit Operations ---
+
+  async writeGeometryEdit(edit) {
+    return _writeGeometryEdit(edit);
+  },
+
+  async getGeometryEditsForTrip(tripId) {
+    return _getGeometryEditsForTrip(tripId);
+  },
+
+  async getUserGeometryEdits() {
+    const session = await _getSession();
+    if (!session) throw new Error('No active session.');
+    return _getUserGeometryEdits(session.user.id);
+  },
+
+  async getGeometryEditStatuses(editIds) {
+    return _getGeometryEditStatuses(editIds);
+  },
+
+  // --- Segment Edit Operations ---
+
+  async writeSegmentEdit(edit) {
+    return _writeSegmentEdit(edit);
+  },
+
+  async getSegmentEditsForTrip(tripId) {
+    return _getSegmentEditsForTrip(tripId);
+  },
+
+  async getUserSegmentEdits() {
+    const session = await _getSession();
+    if (!session) throw new Error('No active session.');
+    return _getUserSegmentEdits(session.user.id);
+  },
+
+  // --- Feature Edit Operations (unified table) ---
+
+  writeFeatureEdit: _supaWriteFeatureEdit,
+  getFeatureEditsForTrip: _supaGetFeatureEditsForTrip,
+  getUserFeatureEdits: _supaGetUserFeatureEdits,
+  updateFeatureEdit: _supaUpdateFeatureEdit,
 };

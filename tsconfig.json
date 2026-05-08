@@ -5,6 +5,12 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@proximity/shared": [
+        "../Proximity/editor/shared/src/index"
+      ],
+      "@proximity/shared/*": [
+        "../Proximity/editor/shared/src/*"
       ]
     }
   },

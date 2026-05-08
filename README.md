@@ -162,6 +162,10 @@ ActiveTripScreen → TripService → NativeAdapter → Native GPS
   - `TripService.ts` - Trip recording and polyline compilation
   - `SyncService.ts` - Offline buffering and sync queue
   - `HistoryService.ts` - Trip retrieval and statistics
+  - `DataRangerService.ts` - Parquet loading, feature editing, tool integration
+  - `rnMapboxAdapter.ts` - MapAdapter implementation for @rnmapbox/maps
+- `/hooks` - Custom React hooks
+  - `useToolGesture.ts` - Converts RN touch events → MapTapEvent → handleToolTap()
 - `/contexts` - React Context providers
   - `AuthContext.tsx` - User authentication state
   - `TourContext.tsx` - Onboarding tour state
@@ -177,32 +181,49 @@ ActiveTripScreen → TripService → NativeAdapter → Native GPS
 
 ### DataRangerService
 
-**Purpose:** Manages curb ramp feature data for DataRanger mode with on-demand downloading and caching
+**Purpose:** Manages Proximity parquet data, feature editing tools, and contribution tracking for DataRanger mode
 
 **Responsibilities:**
-- Downloads curb ramp GeoJSON data from Supabase Storage when DataRanger mode is enabled
-- Caches feature data locally in AsyncStorage for offline access
-- Checks for updates on app launch when DataRanger mode is active
-- Builds spatial grid index for efficient proximity queries (50m radius)
-- Provides features to ActiveTripScreen for display on map
-- Manages feature ratings and uploads to Supabase
+- Downloads Proximity parquet from Supabase Storage when DataRanger mode is enabled
+- Loads parquet data lazily by 500m UTM grid cell based on map viewport bounding box
+- Builds lightweight grid cell index from `street_grid_id` column on init (fast single-column read)
+- Provides `rnMapboxAdapter` (MapAdapter implementation) and `ToolCallbacks` bridge to `@proximity/shared` tool state machines
+- Writes feature edits (ratings, attribute corrections, geometry corrections) to unified `feature_edits` table
+- Submits geometry edits (topology-altering operations) to `geometry_edits` table with local pending cache
+- Syncs geometry edit statuses and surfaces conflicts/rejections
+- Provides user contribution history for Home Screen and Profile statistics
 - Clears cache when DataRanger mode is disabled
 
 **Storage Strategy:**
-- Features stored server-side in Supabase Storage bucket (`dataranger-assets`)
+- Proximity parquet stored server-side in Supabase Storage bucket (`dataranger-assets`)
 - Downloaded only when user enables DataRanger mode (opt-in feature)
-- Cached in AsyncStorage with version timestamp for update detection
-- ~17 MB curb ramps data (San Francisco CRIS dataset)
-- Spatial indexing enables instant queries without server round-trips
+- Raw parquet cached on filesystem; segments loaded lazily by grid cell on demand
+- Grid cell index built from `street_grid_id` column on init (fast single-column read)
+- Parquet key-value metadata contains `proximity_grid_origin` (JSON: `{"x", "y", "cell_size"}`) for viewport-to-grid-cell conversion
+- Grid uses UTM Zone 10N coordinates with 500m cells; origin is min(easting, northing) of all segment centroids
+- Only grid cells overlapping the user's viewport or 500m radius are parsed and cached in memory
+- Spatial indexing on loaded segments enables instant sub-millisecond queries
+- Home screen: loads only cells containing user's feature edits (from `feature_edits` table)
+- Active trip screen: loads cells overlapping visible map viewport (updated on pan/zoom via `onRegionDidChange`)
 
 **Privacy Note:**
 - Feature data is public (city infrastructure data)
 - User ratings are anonymized and linked to trips (which are already anonymized)
 - No personal data stored in feature cache
 
+**Geometry Edits:**
+
+Topology-altering operations (move endpoint, add node, toggle curb ramp, split/merge segments, draw crosswalk) are submitted to the `geometry_edits` Supabase table. These edits require server-side pipeline re-runs to apply to the Proximity parquet.
+
+- `submitGeometryEdit(edit, tripId, userId)` — writes to Supabase + caches in AsyncStorage (`@dataranger/pendingGeometryEdits`)
+- `getPendingGeometryEdits()` — returns locally cached pending edits for map preview
+- `syncGeometryEditStatuses()` — checks Supabase for status updates, removes applied edits, returns conflicts
+
+Edit lifecycle: `pending` → `applied` | `rejected` | `conflict`
+
 **Dependencies:**
-- DatabaseAdapter (download and version checking)
-- AsyncStorage (local caching)
+- DatabaseAdapter (download, version checking, geometry edit CRUD)
+- AsyncStorage (local caching, pending geometry edits)
 
 **Used By:**
 - DataRangerContext (initialization)
@@ -328,7 +349,10 @@ ActiveTripScreen → TripService → NativeAdapter → Native GPS
 **DataService:**
 - Trip data writes (from TripService via SyncService) with server-side time binning
 - Trip data reads (for HistoryService)
-- Asset version checking (local vs. server)
+- Feature edit CRUD (unified `feature_edits` table — ratings, attribute corrections, geometry corrections)
+- Geometry edit CRUD (`geometry_edits` table — topology operations with status lifecycle)
+- Feature image uploads to `feature-images` storage bucket
+- Asset version checking (local vs. server parquet)
 - Privacy-preserving data transformation:
   - Bins absolute timestamps into 7 time-of-day categories (late_night, early_morning, morning_rush, midday, evening_rush, evening, night)
   - Converts dates to weekday/weekend indicator (1 for Mon-Fri, 0 for Sat-Sun)
@@ -473,17 +497,26 @@ All slots are transparent by default, allowing the map to show through unless a 
     - Triggered when user stops a trip on ActiveTripScreen
     - Result stored as `reachedDest` boolean in trip metadata
     - Used for analyzing trip completion rates and routing effectiveness
-- **DataRangerCallout**: Feature rating callout bubble for DataRanger mode
+- **DataRanger Attribute Inspector / Callout**: Feature editing panel for DataRanger rating mode
   - Available on Active Trip and Trip Summary screens only
-  - Displays feature details (location, condition score, intersection position, curb position)
-  - Rating slider (1-10 scale, defaults to 5)
+  - Displays all relevant parquet attributes for tapped feature (point or line)
+  - Point features: location description, condition score, intersection position, curb position, ramp slots
+  - Line features: to_st, from_st, side of road, surface material, width, slope
+  - Inline attribute editing — only modified fields stored in `feature_edits` table (sparse JSONB)
+  - Rating slider (1-10 scale, defaults to 5) for both point and line features
   - Image upload button (camera or photo library via expo-image-picker)
-  - Calls DataRangerService to log ratings to Supabase rated_features table
+  - Calls DataRangerService to write edits to unified `feature_edits` table
   - Compact design optimized for MapboxGL.Callout display
   - Supports re-rating (pre-fills existing rating when available)
-  - **6-Hour Rating Window**: Features encountered more than 6 hours ago display in read-only mode (info only, no interactive UI)
-  - Read-only mode shows existing rating without slider/upload controls
-  - Not available on Home screen (Home screen shows polylines only for trip navigation)
+  - **6-Hour Rating Window**: Features encountered more than 6 hours ago display in read-only mode
+  - Not available on Home screen (Home screen shows polylines + contributed edits only)
+- **DataRanger Tool Panels**: Collapsible panels on Active Trip screen right edge
+  - Rating Panel: activates feature tap → attribute inspector flow
+  - Correction Panel: contains Point/Node Editor + Segment Corrector sub-panels
+  - Displays tool status text from `TOOL_STATUS` constants
+  - Shows subtype selectors when relevant (e.g., add_node: node/ramp/calm)
+  - Confirm button for multi-tap tool finalization (replaces Enter key on web)
+  - Only one tool active at a time; switching tools resets `ToolSessionState`
 - **TripHistoryCard**: Displays trip summary with privacy-preserving binned data (time of day bin, weekday/weekend, mode, duration, distance, comfort rating)
   - Formats time bins into readable labels (e.g., "Morning Rush", "Late Night")
   - Shows weekday vs weekend classification
@@ -717,6 +750,9 @@ When setting up Supabase, ensure proper RLS policies are configured. See `/supab
 - `20250210000001_add_reached_dest.sql` - Adds post-trip survey field and device/software version tracking to user profiles
 - `20250212000000_dataranger_assets.sql` - Creates storage bucket and metadata table for DataRanger feature assets
 - `20250212000001_feature_images.sql` - Creates storage bucket for user-uploaded feature photos and adds image_url column to rated_features table
+- `20260317000000_create_segment_edits.sql` - Creates segment_edits table (legacy, superseded by feature_edits)
+- `20260430000000_create_geometry_edits.sql` - Creates geometry_edits table for topology-altering operations (move endpoint, split segment, etc.) with GiST spatial index and RLS policies
+- `20260504000000_create_feature_edits.sql` - Creates unified feature_edits table consolidating ratings, attribute corrections, and geometry corrections with multi-user geometry support
 
 Refer to `/supabase/SECURITY_DEFINER_AUDIT.md` for security audit documentation.
 
@@ -747,15 +783,48 @@ supabase db lint --level warning
 
 ## DataRanger Mode
 
-DataRanger mode is an opt-in feature that enables users to validate and improve urban infrastructure data quality.
+DataRanger mode is an opt-in feature that enables users to validate and improve urban infrastructure data quality. It integrates shared tool state machines from `@proximity/shared` to provide the same editing capabilities as the web county editor, adapted for mobile touch interaction.
 
 ### Features
 
-- **Curb Ramp Rating**: Rate condition of curb ramps (1-10 scale) during trips with optional photo uploads
-- **Photo Documentation**: Upload images of curb ramps and accessibility features using camera or photo library
-- **Sidewalk Correction**: Correct AI-generated sidewalk network data
-- **On-Demand Asset Loading**: Feature data downloaded only when DataRanger mode is enabled
-- **Automatic Updates**: Checks for new feature data on app launch
+- **Feature Rating**: Rate condition of point features (curb ramps, traffic calming) and line features (sidewalks, bikeways) on a 1-10 scale during trips
+- **Attribute Editing**: Inline attribute inspector (like web editor focus panel) for viewing/editing parquet attributes — only modified fields are stored
+- **Geometry Correction**: Record GPS route data to correct segment geometries; multiple users' corrections are averaged server-side
+- **Point/Node Editing**: Move, add, and delete point features using shared `@proximity/shared` tool state machines (move_point, add_node, delete_point)
+- **Topology Editing**: Split/merge segments, draw crosswalks via shared tools (Tier 2)
+- **Photo Documentation**: Upload images of features using camera or photo library
+- **On-Demand Asset Loading**: Proximity parquet downloaded only when DataRanger mode is enabled, loaded lazily by 500m grid cell based on viewport
+- **Automatic Updates**: Checks for new parquet data on app launch
+
+### Tool Panel Architecture
+
+During active trips with DataRanger mode, two collapsible tool panels appear on the right edge:
+
+1. **Rating Panel**: Tap features to inspect attributes and contribute ratings (points + lines)
+2. **Correction Panel**: Contains two sub-tools:
+   - **Point/Node Editor**: Shared tool state machines for move/add/delete operations
+   - **Segment Corrector**: GPS route recording to correct segment geometry
+
+### Shared Code from @proximity/shared
+
+RollTracks implements the `MapAdapter` interface via `rnMapboxAdapter.ts` using `@rnmapbox/maps` APIs. The following are consumed directly from the shared package:
+
+| Module | Purpose |
+|--------|---------|
+| `ToolId`, `TOOL_STATUS` | Tool identification and status text |
+| `ToolSessionState` | Multi-tap state persistence across touches |
+| `ToolCallbacks` | State mutation interface (edit previews, changeset recording) |
+| `handleToolTap()` | Pure function processing tap events through tool logic |
+| `handleToolFinish()` | Finalizes multi-tap tools (mobile: confirm button instead of Enter key) |
+| Geometry utilities | `projectPointOnSegment`, `nearestPointOnLine` |
+
+### Unified Data Model
+
+All user contributions are stored in a single `feature_edits` table that mirrors the parquet format:
+- Stores `street_grid_id`, geometry, and only the edited attributes (sparse JSONB)
+- Multiple users may submit different geometries for the same feature — each gets its own anonymous UUID row
+- Server-side averaging produces confidence-weighted corrections
+- Replaces the previous separate `rated_features` and `corrected_segments` tables
 
 ### Asset Management
 

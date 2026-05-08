@@ -154,11 +154,36 @@ export default function ProfileScreen() {
   };
 
   const handleToggleDataRanger = async () => {
-    try {
-      await toggleDataRangerMode();
-    } catch (error) {
-      console.error('Toggle DataRanger failed:', error);
-      Alert.alert('Error', 'Failed to toggle DataRanger mode. Please try again.');
+    if (!user?.dataRangerMode) {
+      // Enabling — show storage warning
+      Alert.alert(
+        'Enable DataRanger Mode',
+        'DataRanger mode will download street network data for your area. ' +
+        'This requires approximately 80 MB of local storage and an initial ' +
+        'download of ~42 MB.\n\nProceed?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Enable',
+            onPress: async () => {
+              try {
+                await toggleDataRangerMode();
+              } catch (error) {
+                console.error('Toggle DataRanger failed:', error);
+                Alert.alert('Error', 'Failed to enable DataRanger mode. Please try again.');
+              }
+            },
+          },
+        ],
+      );
+    } else {
+      // Disabling — no warning needed
+      try {
+        await toggleDataRangerMode();
+      } catch (error) {
+        console.error('Toggle DataRanger failed:', error);
+        Alert.alert('Error', 'Failed to disable DataRanger mode. Please try again.');
+      }
     }
   };
 

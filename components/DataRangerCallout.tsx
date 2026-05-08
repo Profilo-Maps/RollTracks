@@ -26,6 +26,7 @@ import {
     Platform,
     ScrollView,
     StyleSheet,
+    TextInput,
     TouchableOpacity,
     View
 } from 'react-native';
@@ -36,7 +37,7 @@ export interface DataRangerCalloutProps {
   feature: Feature | null;
   existingRating: number | null;
   onClose: () => void;
-  onSubmit: (rating: number, imageUri?: string) => Promise<void>;
+  onSubmit: (rating: number, imageUri?: string, attributes?: Record<string, string>) => Promise<void>;
   /** Timestamp when the feature was encountered (for 6-hour time window check) */
   encounterTimestamp?: string;
   /** Force read-only mode (overrides time window check) */
@@ -61,6 +62,7 @@ export function DataRangerCallout({
   const [rating, setRating] = useState<number>(existingRating ?? 5);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingAttributes, setPendingAttributes] = useState<Record<string, string>>({});
 
   // Reset state when modal opens
   useEffect(() => {
@@ -68,6 +70,7 @@ export function DataRangerCallout({
       setRating(existingRating ?? 5);
       setImageUri(null);
       setIsSubmitting(false);
+      setPendingAttributes({});
     }
   }, [visible, feature, existingRating]);
 
@@ -145,12 +148,17 @@ export function DataRangerCallout({
     );
   };
 
+  const handleAttributeChange = (key: string, value: string) => {
+    setPendingAttributes(prev => ({ ...prev, [key]: value }));
+  };
+
   const handleSubmit = async () => {
     if (!feature) return;
-    
+
     setIsSubmitting(true);
     try {
-      await onSubmit(rating, imageUri ?? undefined);
+      const attrs = Object.keys(pendingAttributes).length > 0 ? pendingAttributes : undefined;
+      await onSubmit(rating, imageUri ?? undefined, attrs);
       onClose();
     } catch (error) {
       console.error('[DataRangerCallout] Submit error:', error);
@@ -207,6 +215,16 @@ export function DataRangerCallout({
         <View style={styles.section}>
           <ThemedText style={styles.sectionTitle}>Feature Details</ThemedText>
           <View style={styles.detailRow}>
+            <ThemedText style={styles.detailLabel}>Type:</ThemedText>
+            <ThemedText style={styles.detailValue}>
+              {feature.type === 'curb_ramp'
+                ? 'Curb Ramp'
+                : feature.type === 'traffic_calming'
+                  ? `Traffic Calming`
+                  : feature.type}
+            </ThemedText>
+          </View>
+          <View style={styles.detailRow}>
             <ThemedText style={styles.detailLabel}>Location:</ThemedText>
             <ThemedText style={styles.detailValue} numberOfLines={2}>
               {feature.properties?.location_description || 'Unknown'}
@@ -237,6 +255,57 @@ export function DataRangerCallout({
             </View>
           )}
         </View>
+
+        {/* Attribute Editing — Curb Ramp */}
+        {!isReadOnly && feature.type === 'curb_ramp' && (
+          <View style={styles.section}>
+            <ThemedText style={styles.sectionTitle}>Attributes</ThemedText>
+            <View style={styles.attributeField}>
+              <ThemedText style={styles.attributeLabel}>Return Location</ThemedText>
+              <TextInput
+                style={[styles.attributeInput, { color: colors.text, borderColor: colors.icon, backgroundColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]}
+                value={pendingAttributes['returnloc'] ?? (feature.properties?.location_in_intersection ?? '')}
+                placeholder="e.g. SE corner"
+                placeholderTextColor={colors.icon}
+                onChangeText={(v) => handleAttributeChange('returnloc', v)}
+              />
+            </View>
+            <View style={styles.attributeField}>
+              <ThemedText style={styles.attributeLabel}>Return Position</ThemedText>
+              <TextInput
+                style={[styles.attributeInput, { color: colors.text, borderColor: colors.icon, backgroundColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]}
+                value={pendingAttributes['returnposition'] ?? (feature.properties?.position_on_curb ?? '')}
+                placeholder="e.g. parallel"
+                placeholderTextColor={colors.icon}
+                onChangeText={(v) => handleAttributeChange('returnposition', v)}
+              />
+            </View>
+            <View style={styles.attributeField}>
+              <ThemedText style={styles.attributeLabel}>Condition Score (1–10)</ThemedText>
+              <TextInput
+                style={[styles.attributeInput, { color: colors.text, borderColor: colors.icon, backgroundColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)' }]}
+                value={pendingAttributes['condition_score'] ?? (feature.properties?.condition_score != null ? String(feature.properties.condition_score) : '')}
+                placeholder="1–10"
+                placeholderTextColor={colors.icon}
+                keyboardType="numeric"
+                onChangeText={(v) => handleAttributeChange('condition_score', v)}
+              />
+            </View>
+          </View>
+        )}
+
+        {/* Attribute Editing — Traffic Calming */}
+        {!isReadOnly && feature.type === 'traffic_calming' && (
+          <View style={styles.section}>
+            <ThemedText style={styles.sectionTitle}>Attributes</ThemedText>
+            <View style={styles.detailRow}>
+              <ThemedText style={styles.detailLabel}>Calming Type:</ThemedText>
+              <ThemedText style={styles.detailValue}>
+                {(feature.properties?.subtype as string) ?? 'traffic_calming'}
+              </ThemedText>
+            </View>
+          </View>
+        )}
 
         {/* Show existing rating in read-only mode */}
         {isReadOnly && existingRating !== null && (
@@ -553,6 +622,23 @@ const styles = StyleSheet.create({
   },
   readOnlyRatingLabel: {
     fontSize: 11,
+    fontFamily: Fonts.regular,
+  },
+  attributeField: {
+    marginBottom: 10,
+  },
+  attributeLabel: {
+    fontSize: 12,
+    fontFamily: Fonts.medium,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  attributeInput: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    fontSize: 13,
     fontFamily: Fonts.regular,
   },
 });

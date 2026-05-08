@@ -1,21 +1,24 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File, Paths } from 'expo-file-system';
 
-import { DataService, RatedFeature } from '@/adapters/DatabaseAdapter';
+import { DataService, RatedFeature, FeatureEdit } from '@/adapters/DatabaseAdapter';
 import { Feature } from '@/components/MapViewComponent';
+import type { NetworkSegment, SegmentEdit, FacilityType, CurbRampSlot, GeometryEditPayload, GeometryEditRecord } from '@/services/types/NetworkSegment';
+import type { MapAdapter } from '@/services/rnMapboxAdapter';
+import { SegmentSpatialGrid } from '@/services/utils/SegmentSpatialGrid';
+import { getAllColumns, rowToNetworkSegment } from '@/services/utils/parquetToSegments';
+import { bboxToGridCells } from '@/services/utils/wgs84ToUtm';
+import { canGradeTrip } from '@/utils/timeValidation';
 
 // ═══════════════════════════════════════════════════════════
 // DATA RANGER SERVICE
 // ═══════════════════════════════════════════════════════════
-// Manages curb ramp feature loading, proximity queries, and rating
-// orchestration for DataRanger mode during active trips.
+// Manages proximity network segments, curb ramp querying, rating
+// orchestration, and segment correction for DataRanger mode.
 //
-// Features are downloaded from Supabase Storage on first use and cached
-// locally in AsyncStorage. Updates are checked on each app launch when
-// DataRanger mode is enabled.
-//
-// Follows ObstacleService patterns: singleton, spatial grid,
-// LRU cache, Haversine distance, graceful degradation.
+// All feature and segment data comes from the Proximity parquet
+// downloaded from Supabase Storage. Curb ramps are extracted as
+// point features from segments with segment_type === 'curb_ramp'.
 
 // --- Error Messages ---
 
@@ -31,341 +34,382 @@ const ERROR_MESSAGES = {
   GRADING_WINDOW_EXPIRED: 'Features can only be graded within 6 hours of trip completion',
 };
 
-// --- Internal Types ---
-
-interface CurbRampProperties {
-  LocationDescription: string;
-  conditionScore: number;
-  curbReturnLoc: string;
-  positionOnReturn: string;
-  CNN?: number;
-  detectableSurf?: number | null;
-  Location?: string;
-}
-
-interface CurbRampFeature {
-  type: 'Feature';
-  geometry: {
-    type: 'Point';
-    coordinates: [number, number]; // [lon, lat]
-  };
-  properties: CurbRampProperties;
-}
-
-interface CurbRampsGeoJSON {
-  type: 'FeatureCollection';
-  features: CurbRampFeature[];
-}
-
-interface InternalFeature {
-  id: string;
-  lat: number;
-  lon: number;
-  location_description: string;
-  condition_score: number;
-  location_in_intersection: string;
-  position_on_curb: string;
-}
-
-// --- Spatial Grid (inline) ---
-
-class SpatialGrid {
-  private grid: Map<string, InternalFeature[]>;
-  private cellSize: number;
-
-  constructor(features: InternalFeature[], cellSize: number = 0.001) {
-    this.cellSize = cellSize;
-    this.grid = new Map();
-    for (const feature of features) {
-      const key = this.getKey(feature.lat, feature.lon);
-      const cell = this.grid.get(key);
-      if (cell) {
-        cell.push(feature);
-      } else {
-        this.grid.set(key, [feature]);
-      }
-    }
-  }
-
-  private getKey(lat: number, lon: number): string {
-    return `${Math.floor(lat / this.cellSize)}_${Math.floor(lon / this.cellSize)}`;
-  }
-
-  queryNearby(lat: number, lon: number, radiusMeters: number): InternalFeature[] {
-    // Convert radius to approximate grid cells to search
-    const cellsToSearch = Math.ceil(radiusMeters / (this.cellSize * 111000)) + 1;
-    const centerCellLat = Math.floor(lat / this.cellSize);
-    const centerCellLon = Math.floor(lon / this.cellSize);
-    const candidates: InternalFeature[] = [];
-
-    for (let dLat = -cellsToSearch; dLat <= cellsToSearch; dLat++) {
-      for (let dLon = -cellsToSearch; dLon <= cellsToSearch; dLon++) {
-        const key = `${centerCellLat + dLat}_${centerCellLon + dLon}`;
-        const cell = this.grid.get(key);
-        if (cell) {
-          candidates.push(...cell);
-        }
-      }
-    }
-    return candidates;
-  }
-
-  getStats(): { totalCells: number; totalFeatures: number } {
-    let totalFeatures = 0;
-    for (const cell of this.grid.values()) {
-      totalFeatures += cell.length;
-    }
-    return { totalCells: this.grid.size, totalFeatures };
-  }
-}
-
 // --- DataRanger Service ---
 
 class DataRangerServiceClass {
-  private features: InternalFeature[] = [];
-  private spatialIndex: SpatialGrid | null = null;
-  private isInitialized: boolean = false;
   private queryCache: Map<string, { features: Feature[]; location: { lat: number; lon: number } }> = new Map();
   private readonly MAX_CACHE_SIZE = 10;
   private readonly CACHE_INVALIDATION_DISTANCE_M = 10;
   private readonly MAX_RESULTS = 50;
   private readonly DEFAULT_RADIUS_M = 50;
-  
-  // Storage paths for FileSystem (large files)
-  private readonly DATA_FILE_NAME = 'dataranger_curb_ramps.json';
-  
-  // Storage keys for AsyncStorage (small metadata only)
-  private readonly STORAGE_KEY_VERSION = '@dataranger/curb_ramps_version';
+
+  // Storage paths
+  private readonly PARQUET_FILE_NAME = 'proximity_network.parquet';
+  private readonly PROXIMITY_VERSION_KEY = '@proximity/version';
+  private readonly PENDING_GEOMETRY_EDITS_KEY = '@dataranger/pendingGeometryEdits';
+
+  // Parquet state (lazy loading)
+  private parquetBuffer: ArrayBuffer | null = null;
+  private gridOrigin: { x: number; y: number; cellSize: number } | null = null;
+  private gridCellIndex: Map<string, Set<number>> | null = null; // "col_row" → row group indices
+  private loadedCells: Map<string, NetworkSegment[]> = new Map();
+  private loadingCells: Set<string> = new Set();
+  private segments: NetworkSegment[] = [];
+  private segmentIndex: SegmentSpatialGrid | null = null;
+  private segmentMap: Map<string, NetworkSegment> = new Map();
+  private isInitialized: boolean = false;
 
   // Track ratings for current trip: cris_id → userRating
   private ratedFeatures: Map<string, number> = new Map();
   private currentTripId: string | null = null;
-  
+
   // Debug counter for logging
   private debugRatedCount: number = 0;
 
   /**
-   * Initialize by loading curb ramps from cache, local assets, or downloading from server.
-   * Priority: Cache → Local Assets → Supabase Storage
-   * Checks for updates if DataRanger mode is enabled.
-   * Non-fatal on failure — features are optional.
+   * Initialize by loading proximity network metadata (lazy — no row parsing).
    */
   async initialize(checkForUpdates: boolean = false): Promise<void> {
+    return this.initializeProximity(checkForUpdates);
+  }
+
+  /**
+   * Initialize the proximity network: download parquet if needed, read metadata,
+   * and build a grid cell index from the street_grid_id column.
+   * Does NOT parse full segment rows — those are loaded on demand.
+   */
+  async initializeProximity(checkForUpdates: boolean = false): Promise<void> {
     if (this.isInitialized) {
-      console.log('[DataRangerService] Already initialized');
-      
-      // Still check for updates if requested
       if (checkForUpdates) {
-        await this.checkAndUpdateFeatures();
+        this.checkAndUpdateProximity().catch(err =>
+          console.warn('[DataRangerService] Background update check failed:', err)
+        );
       }
       return;
     }
 
     try {
-      console.log('[DataRangerService] Initializing...');
+      console.log('[DataRangerService] Initializing (metadata only)...');
 
-      // Try to load from cache first
-      const cachedData = await this.loadFromCache();
-      
-      if (cachedData) {
-        console.log('[DataRangerService] Loaded from cache');
-        await this.loadFeatures(cachedData);
-        
-        // Check for updates in background if requested
-        if (checkForUpdates) {
-          this.checkAndUpdateFeatures().catch(err => 
-            console.warn('[DataRangerService] Background update check failed:', err)
-          );
+      // Get parquet buffer (from cache or download)
+      const buffer = await this.getParquetBuffer();
+      this.parquetBuffer = buffer;
+
+      // Read metadata to get grid origin
+      const { parquetMetadataAsync } = await import('hyparquet/src/index.js');
+      const asyncBuffer = this.wrapBuffer(buffer);
+      const metadata = await parquetMetadataAsync(asyncBuffer);
+
+      // Extract grid origin from key-value metadata
+      // hyparquet may return values as Uint8Array (raw parquet bytes) or string
+      const originKv = metadata.key_value_metadata?.find(
+        (kv: { key: string | Uint8Array; value: string | Uint8Array }) => {
+          const k = kv.key instanceof Uint8Array ? new TextDecoder().decode(kv.key) : kv.key;
+          return k === 'proximity_grid_origin';
         }
+      );
+      if (originKv) {
+        const raw = originKv.value;
+        const jsonStr = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw as string;
+        this.gridOrigin = JSON.parse(jsonStr);
+        console.log('[DataRangerService] Grid origin:', this.gridOrigin);
       } else {
-        // No cache, try loading from local assets first
-        console.log('[DataRangerService] No cache found, loading from local assets...');
-        try {
-          await this.loadFromLocalAssets();
-          
-          // After loading local assets, check for server updates in background
-          if (checkForUpdates) {
-            this.checkAndUpdateFeatures().catch(err => 
-              console.warn('[DataRangerService] Background update check failed:', err)
-            );
-          }
-        } catch (localError) {
-          // Local assets failed, try downloading from server
-          console.warn('[DataRangerService] Local assets failed, downloading from server...', localError);
-          await this.downloadAndCacheFeatures();
-        }
-      }
-
-      this.isInitialized = true;
-    } catch (error) {
-      // Log but don't throw — features are optional
-      console.warn('[DataRangerService] Initialization failed (features will be disabled):', error);
-    }
-  }
-
-  /**
-   * Load features from cached data in FileSystem.
-   */
-  private async loadFromCache(): Promise<CurbRampsGeoJSON | null> {
-    try {
-      const file = new File(Paths.document, this.DATA_FILE_NAME);
-      
-      if (!file.exists) {
-        return null;
-      }
-      
-      const cached = await file.text();
-      return JSON.parse(cached);
-    } catch (error) {
-      console.warn('[DataRangerService] Failed to load from cache:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Load features from local assets bundled with the app.
-   * This serves as a fallback when no cache exists and server is unavailable.
-   * 
-   * Note: Disabled for now because Metro bundler has issues with large JSON files.
-   * The app will fall back to downloading from Supabase Storage instead.
-   */
-  private async loadFromLocalAssets(): Promise<void> {
-    throw new Error('Local assets loading disabled - will download from server instead');
-    
-    // TODO: Re-enable if needed by using expo-file-system to load from assets
-    // or by converting the GeoJSON to a smaller format that Metro can handle
-  }
-
-  /**
-   * Download features from Supabase Storage and cache locally.
-   */
-  private async downloadAndCacheFeatures(): Promise<void> {
-    try {
-      // Download from server
-      const data: CurbRampsGeoJSON = await DataService.downloadAsset('CurbRamps');
-      
-      // Cache the data to FileSystem (handles large files)
-      const file = new File(Paths.document, this.DATA_FILE_NAME);
-      file.write(JSON.stringify(data));
-      
-      // Store the current version timestamp in AsyncStorage (small metadata)
-      const version = new Date().toISOString();
-      await AsyncStorage.setItem(this.STORAGE_KEY_VERSION, version);
-      
-      console.log('[DataRangerService] Downloaded and cached features');
-      
-      // Load into memory
-      await this.loadFeatures(data);
-    } catch (error) {
-      console.error('[DataRangerService] Failed to download features:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Check for updates and download if available.
-   */
-  private async checkAndUpdateFeatures(): Promise<void> {
-    try {
-      // Get server version
-      const serverVersion = await DataService.checkAssetUpdates('CurbRamps');
-      if (!serverVersion) {
-        console.log('[DataRangerService] No version info available on server');
+        console.warn('[DataRangerService] No grid origin in parquet metadata, falling back to full load');
+        console.log('[DataRangerService] Available keys:', metadata.key_value_metadata?.map((kv: { key: unknown }) => kv.key));
+        await this.fullLoadFallback(buffer);
         return;
       }
 
-      // Get local version
-      const localVersion = await AsyncStorage.getItem(this.STORAGE_KEY_VERSION);
-      
-      if (!localVersion || new Date(serverVersion) > new Date(localVersion)) {
-        console.log('[DataRangerService] Update available, downloading...');
-        await this.downloadAndCacheFeatures();
-      } else {
-        console.log('[DataRangerService] Features are up to date');
+      // Build grid cell index (fast — single column read)
+      await this.buildGridCellIndex(buffer);
+
+      this.isInitialized = true;
+      console.log(`[DataRangerService] Initialized: ${this.gridCellIndex?.size ?? 0} grid cells indexed`);
+
+      if (checkForUpdates) {
+        this.checkAndUpdateProximity().catch(err =>
+          console.warn('[DataRangerService] Background update check failed:', err)
+        );
       }
     } catch (error) {
-      console.warn('[DataRangerService] Failed to check for updates:', error);
+      console.warn('[DataRangerService] Initialization failed:', error);
     }
   }
 
-  /**
-   * Load features from GeoJSON data into memory and build spatial index.
-   */
-  private async loadFeatures(data: CurbRampsGeoJSON): Promise<void> {
-    if (!data.features || !Array.isArray(data.features)) {
-      console.warn('[DataRangerService] Invalid GeoJSON data');
-      return;
+  private wrapBuffer(buffer: ArrayBuffer) {
+    return {
+      byteLength: buffer.byteLength,
+      slice(start: number, end?: number): Promise<ArrayBuffer> {
+        return Promise.resolve(buffer.slice(start, end));
+      },
+    };
+  }
+
+  private async getParquetBuffer(): Promise<ArrayBuffer> {
+    // Check filesystem cache
+    const file = new File(Paths.document, this.PARQUET_FILE_NAME);
+    if (file.exists) {
+      console.log('[DataRangerService] Loading parquet from filesystem cache');
+      return file.arrayBuffer();
     }
 
-    // Clear existing features
-    this.features = [];
+    // Download from Supabase
+    console.log('[DataRangerService] Downloading parquet...');
+    const buffer = await DataService.downloadProximityAsset();
 
-    // Parse and validate GeoJSON features
-    let validCount = 0;
-    for (let i = 0; i < data.features.length; i++) {
-      const feature = data.features[i];
-      const [lon, lat] = feature.geometry.coordinates;
-      const props = feature.properties;
+    // Cache to filesystem
+    const bytes = new Uint8Array(buffer);
+    file.write(bytes);
+    await AsyncStorage.setItem(this.PROXIMITY_VERSION_KEY, new Date().toISOString());
 
-      if (!this.isValidCoordinate(lat, lon)) {
-        continue;
-      }
+    return buffer;
+  }
 
-      this.features.push({
-        id: `cris_${props.CNN ?? i}`, // Use CNN as ID if available
-        lat,
-        lon,
-        location_description: props.LocationDescription ?? '',
-        condition_score: props.conditionScore ?? 0,
-        location_in_intersection: props.curbReturnLoc ?? '',
-        position_on_curb: props.positionOnReturn ?? '',
+  private async buildGridCellIndex(buffer: ArrayBuffer): Promise<void> {
+    const { parquetMetadataAsync, parquetRead } = await import('hyparquet/src/index.js');
+    const asyncBuffer = this.wrapBuffer(buffer);
+    const metadata = await parquetMetadataAsync(asyncBuffer);
+    const rowGroups = metadata.row_groups ?? [];
+
+    this.gridCellIndex = new Map(); // cellKey → Set<rowGroupIndex>
+
+    // Compute cumulative row offsets so we can use rowStart/rowEnd per group.
+    let globalRowOffset = 0;
+    for (let rgIdx = 0; rgIdx < rowGroups.length; rgIdx++) {
+      const groupRows = Number(rowGroups[rgIdx].num_rows);
+      const rowStart = globalRowOffset;
+      const rowEnd = globalRowOffset + groupRows;
+      globalRowOffset = rowEnd;
+
+      const cellsInGroup = new Set<string>();
+
+      await new Promise<void>((resolve, reject) => {
+        parquetRead({
+          file: asyncBuffer,
+          metadata,
+          columns: ['street_grid_id'],
+          rowStart,
+          rowEnd,
+          onChunk: (chunk: any) => {
+            // onChunk delivers one ColumnData per page: chunk.columnData is a DecodedArray
+            const data: unknown[] = chunk.columnData ?? [];
+            for (const v of data) {
+              if (typeof v !== 'string') continue;
+              const parts = v.split('_');
+              if (parts.length >= 2) {
+                cellsInGroup.add(`${parts[0]}_${parts[1]}`);
+              }
+            }
+          },
+        }).then(resolve).catch(reject);
       });
 
-      validCount++;
-
-      // Limit to prevent memory issues
-      if (validCount >= 100000) {
-        console.warn('[DataRangerService] Reached maximum feature limit (100,000)');
-        break;
+      for (const cellKey of cellsInGroup) {
+        const existing = this.gridCellIndex.get(cellKey);
+        if (existing) {
+          existing.add(rgIdx);
+        } else {
+          this.gridCellIndex.set(cellKey, new Set([rgIdx]));
+        }
       }
     }
 
-    if (this.features.length > 0) {
-      // Build spatial index
-      this.spatialIndex = new SpatialGrid(this.features, 0.001);
-      const stats = this.spatialIndex.getStats();
-      console.log('[DataRangerService] Spatial index stats:', stats);
-    }
-
-    console.log(`[DataRangerService] Loaded ${validCount} features into memory`);
+    console.log(`[DataRangerService] Grid cell index: ${this.gridCellIndex.size} cells across ${rowGroups.length} row groups`);
   }
 
   /**
-   * Clear all cached data (useful when DataRanger mode is disabled).
+   * Fallback: load all segments if parquet lacks grid origin metadata.
+   * This preserves backward compatibility with older parquet files.
    */
-  async clearCache(): Promise<void> {
-    try {
-      // Remove the data file
-      const file = new File(Paths.document, this.DATA_FILE_NAME);
-      if (file.exists) {
-        file.delete();
+  private async fullLoadFallback(buffer: ArrayBuffer): Promise<void> {
+    const { parquetReadObjects } = await import('hyparquet/src/index.js');
+    const asyncBuffer = this.wrapBuffer(buffer);
+    const columns = getAllColumns();
+
+    const rows = await parquetReadObjects({ file: asyncBuffer, columns });
+    const segments: NetworkSegment[] = [];
+    for (const row of rows) {
+      const segment = rowToNetworkSegment(row as Record<string, unknown>);
+      if (segment) segments.push(segment);
+    }
+
+    this.loadSegmentsIntoMemory(segments);
+    this.isInitialized = true;
+    console.log(`[DataRangerService] Full fallback load: ${segments.length} segments`);
+  }
+
+  /**
+   * Load grid cells that overlap the given bounding box.
+   * Skips cells already loaded. Returns when all needed cells are ready.
+   */
+  async loadGridCellsForBbox(bbox: { minLon: number; minLat: number; maxLon: number; maxLat: number }): Promise<void> {
+    if (!this.gridOrigin || !this.gridCellIndex || !this.parquetBuffer) return;
+
+    const range = bboxToGridCells(bbox, { x: this.gridOrigin.x, y: this.gridOrigin.y }, this.gridOrigin.cellSize);
+
+    // Collect which row groups we need and which cell keys to load
+    const neededRowGroups = new Set<number>();
+    const cellsToLoad: string[] = [];
+
+    for (let col = range.minCol; col <= range.maxCol; col++) {
+      for (let row = range.minRow; row <= range.maxRow; row++) {
+        const cellKey = `${col}_${row}`;
+        if (this.loadedCells.has(cellKey) || this.loadingCells.has(cellKey)) continue;
+        const rgs = this.gridCellIndex.get(cellKey);
+        if (!rgs) continue;
+        cellsToLoad.push(cellKey);
+        for (const rg of rgs) neededRowGroups.add(rg);
       }
-      
-      // Remove version metadata
-      await AsyncStorage.removeItem(this.STORAGE_KEY_VERSION);
-      
-      console.log('[DataRangerService] Cache cleared');
-    } catch (error) {
-      console.warn('[DataRangerService] Failed to clear cache:', error);
+    }
+
+    if (cellsToLoad.length === 0) return;
+
+    console.log(`[DataRangerService] Loading ${cellsToLoad.length} grid cells from ${neededRowGroups.size} row groups`);
+    for (const cellKey of cellsToLoad) this.loadingCells.add(cellKey);
+
+    try {
+      const { parquetMetadataAsync, parquetReadObjects } = await import('hyparquet/src/index.js');
+      const asyncBuffer = this.wrapBuffer(this.parquetBuffer);
+      const columns = getAllColumns();
+      const neededCellSet = new Set(cellsToLoad);
+
+      // Read metadata once so we can compute per-row-group row ranges.
+      const metadata = await parquetMetadataAsync(asyncBuffer);
+      const rowGroups = metadata.row_groups ?? [];
+
+      // Compute cumulative row offsets for each row group.
+      const rgOffsets: number[] = [];
+      let offset = 0;
+      for (const rg of rowGroups) {
+        rgOffsets.push(offset);
+        offset += Number(rg.num_rows);
+      }
+
+      // Read each needed row group individually using rowStart/rowEnd,
+      // then filter rows to only the cells we need.
+      const sortedGroups = [...neededRowGroups].sort((a, b) => a - b);
+
+      for (const rgIdx of sortedGroups) {
+        const rowStart = rgOffsets[rgIdx];
+        const rowEnd = rowStart + Number(rowGroups[rgIdx].num_rows);
+
+        const rows = await parquetReadObjects({
+          file: asyncBuffer,
+          metadata,
+          columns,
+          rowStart,
+          rowEnd,
+        });
+
+        for (const row of rows) {
+          const gridId = (row as any).street_grid_id as string;
+          if (!gridId) continue;
+          const parts = gridId.split('_');
+          if (parts.length < 2) continue;
+          const cellKey = `${parts[0]}_${parts[1]}`;
+          if (!neededCellSet.has(cellKey)) continue;
+
+          const segment = rowToNetworkSegment(row as Record<string, unknown>);
+          if (!segment) continue;
+
+          const existing = this.loadedCells.get(cellKey);
+          if (existing) {
+            existing.push(segment);
+          } else {
+            this.loadedCells.set(cellKey, [segment]);
+          }
+          this.segmentMap.set(segment.streetGridId, segment);
+        }
+      }
+
+      for (const cellKey of cellsToLoad) {
+        this.loadingCells.delete(cellKey);
+        if (!this.loadedCells.has(cellKey)) this.loadedCells.set(cellKey, []);
+      }
+
+      this.rebuildIndex();
+      console.log(`[DataRangerService] Loaded cells. Spatial index: ${this.segmentIndex?.getStats().totalSegments ?? 0} segments`);
+    } catch (err) {
+      for (const cellKey of cellsToLoad) this.loadingCells.delete(cellKey);
+      console.warn('[DataRangerService] loadGridCellsForBbox failed:', err);
     }
   }
 
   /**
-   * Query features within radius of a location.
+   * Load grid cells near a point (for position-based queries).
+   */
+  async loadGridCellsNearPoint(lat: number, lon: number, radiusM: number = 500): Promise<void> {
+    const latDelta = radiusM / 111320;
+    const lonDelta = radiusM / (111320 * Math.cos(lat * Math.PI / 180));
+    await this.loadGridCellsForBbox({
+      minLon: lon - lonDelta,
+      minLat: lat - latDelta,
+      maxLon: lon + lonDelta,
+      maxLat: lat + latDelta,
+    });
+  }
+
+  private loadSegmentsIntoMemory(segments: NetworkSegment[]): void {
+    this.segments = segments;
+    this.segmentMap.clear();
+    for (const seg of segments) {
+      this.segmentMap.set(seg.streetGridId, seg);
+    }
+    this.segmentIndex = new SegmentSpatialGrid(segments, 0.001);
+  }
+
+  private rebuildIndex(): void {
+    this.segments = [];
+    for (const cellSegments of this.loadedCells.values()) {
+      this.segments.push(...cellSegments);
+    }
+    this.segmentIndex = new SegmentSpatialGrid(this.segments, 0.001);
+  }
+
+  private async checkAndUpdateProximity(): Promise<void> {
+    try {
+      const serverVersion = await DataService.checkAssetUpdates('ProximityNetwork');
+      if (!serverVersion) return;
+
+      const localVersion = await AsyncStorage.getItem(this.PROXIMITY_VERSION_KEY);
+      if (!localVersion || new Date(serverVersion) > new Date(localVersion)) {
+        console.log('[DataRangerService] Proximity update available, re-downloading...');
+        // Clear cached file and re-initialize
+        const file = new File(Paths.document, this.PARQUET_FILE_NAME);
+        if (file.exists) file.delete();
+
+        // Reset state and re-initialize
+        this.parquetBuffer = null;
+        this.gridOrigin = null;
+        this.gridCellIndex = null;
+        this.loadedCells.clear();
+        this.loadingCells.clear();
+        this.segments = [];
+        this.segmentIndex = null;
+        this.segmentMap.clear();
+        this.isInitialized = false;
+
+        await this.initializeProximity(false);
+      }
+    } catch (error) {
+      console.warn('[DataRangerService] Failed to check proximity updates:', error);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // FEATURE QUERIES (curb ramps from proximity segments)
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * Query curb ramp features within radius of a location.
+   * Curb ramps are extracted from sidewalk curbRamps[] slots on nearby segments.
    * Returns Feature[] compatible with MapViewComponent.
+   *
+   * NOTE: Cells must be pre-loaded by the caller via loadGridCellsNearPoint()
+   * or loadGridCellsForBbox(). This method only queries already-loaded segments.
    */
   queryNearbyFeatures(lat: number, lon: number, radiusM?: number): Feature[] {
-    if (!this.isInitialized || this.features.length === 0) {
+    if (!this.isInitialized || !this.segmentIndex) {
       return [];
     }
 
@@ -389,35 +433,33 @@ class DataRangerServiceClass {
         this.queryCache.delete(cacheKey);
       }
 
-      // Get candidates from spatial index
-      let candidates: InternalFeature[];
-      if (this.spatialIndex) {
-        candidates = this.spatialIndex.queryNearby(lat, lon, radius);
-      } else {
-        candidates = this.features;
+      // Query nearby segments and extract curb ramps from sidewalks
+      const nearbySegments = this.segmentIndex.queryNearby(lat, lon, radius);
+      const mapFeatures: Feature[] = [];
+
+      for (const seg of nearbySegments) {
+        // Extract curb ramps from both sidewalks
+        const sides = [seg.sidewalkLeft, seg.sidewalkRight];
+        for (const sidewalk of sides) {
+          if (!sidewalk?.curbRamps) continue;
+          for (const ramp of sidewalk.curbRamps) {
+            if (!ramp.geometry || !ramp.id) continue;
+            const [rampLon, rampLat] = ramp.geometry.coordinates;
+            if (this.calculateDistance(lat, lon, rampLat, rampLon) <= radius) {
+              mapFeatures.push(this.curbRampToFeature(ramp, seg.streetGridId));
+            }
+          }
+        }
+
+        if (mapFeatures.length >= this.MAX_RESULTS) break;
       }
 
-      // Filter by actual Haversine distance
-      const results = candidates.filter((feature) => {
-        return this.calculateDistance(lat, lon, feature.lat, feature.lon) <= radius;
-      });
-
-      // Sort by distance and limit
-      results.sort((a, b) => {
-        const distA = this.calculateDistance(lat, lon, a.lat, a.lon);
-        const distB = this.calculateDistance(lat, lon, b.lat, b.lon);
-        return distA - distB;
-      });
-
-      const limited = results.slice(0, this.MAX_RESULTS);
-
-      // Convert to MapViewComponent Feature[]
-      const mapFeatures = limited.map((f) => this.toMapFeature(f));
+      const limited = mapFeatures.slice(0, this.MAX_RESULTS);
 
       // Cache results
-      this.cacheQueryResult(cacheKey, mapFeatures, lat, lon);
+      this.cacheQueryResult(cacheKey, limited, lat, lon);
 
-      return mapFeatures;
+      return limited;
     } catch (error) {
       console.error('[DataRangerService] Error querying nearby features:', error);
       return [];
@@ -425,126 +467,229 @@ class DataRangerServiceClass {
   }
 
   /**
-   * Rate a feature. Persists to Supabase via DataService.
-   * Updates the ratedFeatures map and invalidates cache.
+   * Convert a CurbRampSlot to a MapViewComponent Feature.
    */
+  private curbRampToFeature(ramp: CurbRampSlot, streetGridId: string): Feature {
+    const featureId = ramp.id ?? `${streetGridId}_${ramp.position}_${ramp.slotNumber}`;
+    const isRated = this.ratedFeatures.has(featureId);
+    const userRating = this.ratedFeatures.get(featureId);
+
+    if (isRated && this.debugRatedCount < 3) {
+      console.log('[DataRangerService] curbRampToFeature - Rated:', {
+        id: featureId,
+        isRated,
+        userRating,
+      });
+      this.debugRatedCount++;
+    }
+
+    const [rampLon, rampLat] = ramp.geometry!.coordinates;
+
+    return {
+      id: featureId,
+      coordinate: [rampLon, rampLat],
+      type: 'curb_ramp',
+      properties: {
+        condition_score: ramp.conditionScore ?? undefined,
+        location_in_intersection: ramp.returnloc ?? undefined,
+        position_on_curb: ramp.returnposition ?? undefined,
+        rated: isRated,
+        ...(userRating !== undefined && { userRating }),
+      },
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // SEGMENT QUERIES
+  // ═══════════════════════════════════════════════════════════
+
   /**
-     * Rate a feature. Persists to Supabase via DataService.
-     * Checks for existing rating and updates instead of creating duplicate.
-     * Validates 6-hour grading window for completed trips.
-     * Updates the ratedFeatures map and invalidates cache.
-     * 
-     * @param feature - Feature to rate
-     * @param tripId - Trip ID (ULID format with embedded timestamp)
-     * @param userId - User ID
-     * @param rating - Rating value (1-10)
-     * @param tripStatus - Current trip status for time window validation
-     * @param imageUri - Optional image URI to upload
-     * @throws Error if validation fails or storage operation fails
-     */
-    async rateFeature(
-      feature: Feature,
-      tripId: string,
-      userId: string,
-      rating: number,
-      tripStatus: 'active' | 'paused' | 'completed',
-      imageUri?: string,
-    ): Promise<void> {
-      try {
-        // Validate rating
-        if (rating < 1 || rating > 10) {
-          throw new Error(ERROR_MESSAGES.INVALID_RATING);
-        }
+   * Query nearby network segments within radius of user position.
+   *
+   * NOTE: Cells must be pre-loaded by the caller via loadGridCellsNearPoint()
+   * or loadGridCellsForBbox(). This method only queries already-loaded segments.
+   */
+  queryNearbySegments(lat: number, lon: number, radiusM: number = 50): NetworkSegment[] {
+    if (!this.isInitialized || !this.segmentIndex) {
+      return [];
+    }
+    return this.segmentIndex.queryNearby(lat, lon, radiusM);
+  }
 
-        // Validate feature
-        if (!feature.id || !feature.coordinate || feature.coordinate.length !== 2) {
-          throw new Error(ERROR_MESSAGES.INVALID_FEATURE);
-        }
+  /**
+   * Get a segment by its streetGridId.
+   */
+  getSegmentById(streetGridId: string): NetworkSegment | null {
+    return this.segmentMap.get(streetGridId) ?? null;
+  }
 
-        // Validate coordinates
-        const [lon, lat] = feature.coordinate;
-        if (!this.isValidCoordinate(lat, lon)) {
-          throw new Error(ERROR_MESSAGES.INVALID_COORDINATES);
-        }
+  /**
+   * Submit an attribute edit for a segment facility.
+   * Writes to Supabase and updates the in-memory segment.
+   */
+  async submitSegmentEdit(edit: SegmentEdit): Promise<void> {
+    // Write to Supabase
+    await DataService.writeSegmentEdit({
+      tripId: edit.tripId,
+      userId: edit.userId,
+      streetGridId: edit.streetGridId,
+      facilityType: edit.facilityType,
+      fieldName: edit.fieldName,
+      oldValue: edit.oldValue,
+      newValue: edit.newValue,
+    });
 
-        // Check 6-hour grading window for completed trips
-        if (tripStatus === 'completed' && !canGradeTrip(tripId, tripStatus)) {
-          throw new Error(ERROR_MESSAGES.GRADING_WINDOW_EXPIRED);
-        }
-
-        let imageUrl: string | undefined;
-
-        // Upload image if provided
-        if (imageUri) {
-          try {
-            imageUrl = await DataService.uploadFeatureImage(
-              userId,
-              imageUri,
-              feature.id,
-            );
-          } catch (error) {
-            console.error('[DataRangerService] Failed to upload image:', error);
-            // Don't throw - continue with rating submission
-            // User should be notified via UI that image upload failed
-          }
-        }
-
-        // Check if rating already exists for this feature in this trip
-        const existingRatings = await DataService.getRatingsForTrip(tripId);
-        const existingRating = existingRatings.find(r => r.crisId === feature.id);
-
-        if (existingRating) {
-          // Update existing rating
-          console.log(`[DataRangerService] Updating existing rating for feature ${feature.id}`);
-          await DataService.updateRating(existingRating.crisId, tripId, {
-            userRating: rating,
-            ...(imageUrl && { imageUrl }),
-          });
-        } else {
-          // Create new rating
-          console.log(`[DataRangerService] Creating new rating for feature ${feature.id}`);
-          await DataService.writeRating({
-            userId,
-            tripId,
-            crisId: feature.id,
-            conditionScore: feature.properties?.condition_score ?? 0,
-            userRating: rating,
-            lat: lat,
-            long: lon,
-            timeStamp: new Date().toISOString(),
-            imageUrl,
-          });
-        }
-
-        // Track the rating in-memory
-        this.ratedFeatures.set(feature.id, rating);
-
-        // Invalidate cache so next query reflects rated status
-        this.queryCache.clear();
-      } catch (error: any) {
-        // Re-throw validation errors as-is
-        if (error.message && Object.values(ERROR_MESSAGES).includes(error.message)) {
-          throw error;
-        }
-        // Wrap storage errors
-        console.error('[DataRangerService] Error rating feature:', error);
-        throw new Error(ERROR_MESSAGES.STORAGE_WRITE_FAILED);
+    // Update in-memory segment
+    const segment = this.segmentMap.get(edit.streetGridId);
+    if (segment) {
+      this.applyEditToSegment(segment, edit);
+      if (this.segmentIndex) {
+        this.segmentIndex.updateSegment(segment);
       }
     }
 
+    // Invalidate query cache
+    this.queryCache.clear();
+  }
+
+  private applyEditToSegment(segment: NetworkSegment, edit: SegmentEdit): void {
+    const facility = this.getFacilityFromSegment(segment, edit.facilityType);
+    if (facility && edit.fieldName in facility) {
+      const numericFields = ['width', 'incline', 'lanes', 'laneWidth'];
+      if (numericFields.includes(edit.fieldName)) {
+        (facility as any)[edit.fieldName] = parseFloat(edit.newValue);
+      } else {
+        (facility as any)[edit.fieldName] = edit.newValue;
+      }
+    }
+  }
+
+  private getFacilityFromSegment(segment: NetworkSegment, facilityType: FacilityType): Record<string, unknown> | null {
+    switch (facilityType) {
+      case 'street': return segment.street as any;
+      case 'sidewalk_left': return segment.sidewalkLeft as any;
+      case 'sidewalk_right': return segment.sidewalkRight as any;
+      case 'crosswalk_start': return segment.crosswalkStart as any;
+      case 'crosswalk_end': return segment.crosswalkEnd as any;
+      case 'bikeway_left_1': return segment.bikewayLeft1 as any;
+      case 'bikeway_left_2': return segment.bikewayLeft2 as any;
+      case 'bikeway_right_1': return segment.bikewayRight1 as any;
+      case 'bikeway_right_2': return segment.bikewayRight2 as any;
+      default: return null;
+    }
+  }
+
+  /**
+   * Whether the proximity network is loaded and ready.
+   */
+  isProximityReady(): boolean {
+    return this.isInitialized;
+  }
+
+  /**
+   * Whether the service is initialized and ready.
+   */
+  isReady(): boolean {
+    return this.isInitialized;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // RATING METHODS
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * Rate a feature. Persists to Supabase via DataService.
+   * Checks for existing rating and updates instead of creating duplicate.
+   * Validates 6-hour grading window for completed trips.
+   */
+  async rateFeature(
+    feature: Feature,
+    tripId: string,
+    userId: string,
+    rating: number,
+    tripStatus: 'active' | 'paused' | 'completed',
+    imageUri?: string,
+  ): Promise<void> {
+    try {
+      if (rating < 1 || rating > 10) {
+        throw new Error(ERROR_MESSAGES.INVALID_RATING);
+      }
+
+      if (!feature.id || !feature.coordinate || feature.coordinate.length !== 2) {
+        throw new Error(ERROR_MESSAGES.INVALID_FEATURE);
+      }
+
+      const [lon, lat] = feature.coordinate;
+      if (!this.isValidCoordinate(lat, lon)) {
+        throw new Error(ERROR_MESSAGES.INVALID_COORDINATES);
+      }
+
+      if (tripStatus === 'completed' && !canGradeTrip(tripId, tripStatus)) {
+        throw new Error(ERROR_MESSAGES.GRADING_WINDOW_EXPIRED);
+      }
+
+      let imageUrl: string | undefined;
+
+      if (imageUri) {
+        try {
+          imageUrl = await DataService.uploadFeatureImage(
+            userId,
+            imageUri,
+            feature.id,
+          );
+        } catch (error) {
+          console.error('[DataRangerService] Failed to upload image:', error);
+        }
+      }
+
+      // Check if rating already exists for this feature in this trip
+      const existingRatings = await DataService.getRatingsForTrip(tripId);
+      const existingRating = existingRatings.find(r => r.crisId === feature.id);
+
+      if (existingRating) {
+        console.log(`[DataRangerService] Updating existing rating for feature ${feature.id}`);
+        await DataService.updateRating(existingRating.crisId, tripId, {
+          userRating: rating,
+          ...(imageUrl && { imageUrl }),
+        });
+      } else {
+        console.log(`[DataRangerService] Creating new rating for feature ${feature.id}`);
+        await DataService.writeRating({
+          userId,
+          tripId,
+          crisId: feature.id,
+          conditionScore: feature.properties?.condition_score ?? 0,
+          userRating: rating,
+          lat: lat,
+          long: lon,
+          timeStamp: new Date().toISOString(),
+          imageUrl,
+        });
+      }
+
+      this.ratedFeatures.set(feature.id, rating);
+      this.queryCache.clear();
+    } catch (error: any) {
+      if (error.message && Object.values(ERROR_MESSAGES).includes(error.message)) {
+        throw error;
+      }
+      console.error('[DataRangerService] Error rating feature:', error);
+      throw new Error(ERROR_MESSAGES.STORAGE_WRITE_FAILED);
+    }
+  }
+
   /**
    * Load existing ratings for a trip (e.g., when resuming).
-   * Populates the ratedFeatures map.
    */
   async loadTripRatings(tripId: string): Promise<void> {
     try {
       console.log('[DataRangerService] loadTripRatings - Loading ratings for trip:', tripId);
       const ratings: RatedFeature[] = await DataService.getRatingsForTrip(tripId);
       console.log('[DataRangerService] loadTripRatings - Got ratings from DataService:', ratings.length);
-      
+
       this.ratedFeatures.clear();
-      this.debugRatedCount = 0; // Reset debug counter
-      
+      this.debugRatedCount = 0;
+
       for (const r of ratings) {
         this.ratedFeatures.set(r.crisId, r.userRating);
         if (this.debugRatedCount < 3) {
@@ -554,28 +699,23 @@ class DataRangerServiceClass {
           });
         }
       }
-      
+
       this.currentTripId = tripId;
       console.log(`[DataRangerService] Loaded ${ratings.length} existing ratings for trip`);
-      console.log(`[DataRangerService] ratedFeatures map size: ${this.ratedFeatures.size}`);
     } catch (error) {
       console.warn('[DataRangerService] Failed to load trip ratings:', error);
     }
   }
+
   /**
    * Load all ratings for the current user across all trips.
-   * This allows showing previously rated features even on new trips.
-   * Populates the ratedFeatures map with the most recent rating for each feature.
    */
   async loadAllUserRatings(userId: string): Promise<void> {
     try {
       const ratings: RatedFeature[] = await DataService.getUserRatings();
 
-      // Clear existing ratings
       this.ratedFeatures.clear();
 
-      // Build map of feature ID to most recent rating
-      // If a feature was rated multiple times, keep the most recent
       const ratingsByFeature = new Map<string, { rating: number; timestamp: string }>();
 
       for (const r of ratings) {
@@ -588,7 +728,6 @@ class DataRangerServiceClass {
         }
       }
 
-      // Populate ratedFeatures map
       for (const [crisId, data] of ratingsByFeature.entries()) {
         this.ratedFeatures.set(crisId, data.rating);
       }
@@ -599,10 +738,6 @@ class DataRangerServiceClass {
     }
   }
 
-  /**
-   * Get ratings for a specific trip (for trip summary display).
-   * Returns full rating data including feature IDs and user ratings.
-   */
   async getRatingsForTrip(tripId: string): Promise<RatedFeature[]> {
     try {
       return await DataService.getRatingsForTrip(tripId);
@@ -612,27 +747,295 @@ class DataRangerServiceClass {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════
+  // GEOMETRY EDITS (topology-altering operations)
+  // ═══════════════════════════════════════════════════════════
+
+  async submitGeometryEdit(edit: GeometryEditPayload, tripId: string, userId: string): Promise<string> {
+    const { id } = await DataService.writeGeometryEdit({
+      tripId,
+      userId,
+      editType: edit.editType,
+      streetGridId: edit.streetGridId,
+      payload: edit.payload as unknown as Record<string, unknown>,
+      coord: edit.coord,
+    });
+
+    // Cache locally for map preview
+    const pending = await this.loadPendingGeometryEdits();
+    const record: GeometryEditRecord = {
+      ...edit,
+      id,
+      userId,
+      tripId,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    pending.push(record);
+    await AsyncStorage.setItem(this.PENDING_GEOMETRY_EDITS_KEY, JSON.stringify(pending));
+
+    this.queryCache.clear();
+    return id;
+  }
+
+  async getPendingGeometryEdits(): Promise<GeometryEditRecord[]> {
+    return this.loadPendingGeometryEdits();
+  }
+
+  async syncGeometryEditStatuses(): Promise<GeometryEditRecord[]> {
+    const pending = await this.loadPendingGeometryEdits();
+    if (pending.length === 0) return [];
+
+    const statuses = await DataService.getGeometryEditStatuses(pending.map(e => e.id));
+    const statusMap = new Map(statuses.map(s => [s.id, s.status]));
+
+    const conflicts: GeometryEditRecord[] = [];
+    const stillPending: GeometryEditRecord[] = [];
+
+    for (const edit of pending) {
+      const serverStatus = statusMap.get(edit.id) ?? 'pending';
+      if (serverStatus === 'conflict' || serverStatus === 'rejected') {
+        conflicts.push({ ...edit, status: serverStatus as GeometryEditRecord['status'] });
+      } else if (serverStatus === 'pending') {
+        stillPending.push(edit);
+      }
+      // 'applied' edits are dropped from local cache
+    }
+
+    await AsyncStorage.setItem(this.PENDING_GEOMETRY_EDITS_KEY, JSON.stringify(stillPending));
+    return conflicts;
+  }
+
+  private async loadPendingGeometryEdits(): Promise<GeometryEditRecord[]> {
+    try {
+      const raw = await AsyncStorage.getItem(this.PENDING_GEOMETRY_EDITS_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
   /**
-   * Start tracking a new trip. Clears previous trip state.
+   * Submit a brand-new segment drawn from GPS trip polyline.
+   * The geometry is a LineString extracted from the trip between start/end indices.
+   * Written to geometry_edits with edit_type='draw_segment', no street_grid_id.
    */
+  async submitNewSegment(
+    geometry: { type: 'LineString'; coordinates: [number, number][] },
+    facilityType: string,
+    attributes: Record<string, string>,
+    tripId: string,
+    userId: string,
+  ): Promise<void> {
+    const coord = geometry.coordinates[0] ?? [0, 0];
+    await this.submitGeometryEdit(
+      {
+        editType: 'draw_segment',
+        streetGridId: undefined,
+        payload: { facilityType, geometry, attributes },
+        coord: coord as [number, number],
+      },
+      tripId,
+      userId,
+    );
+  }
+
+  /**
+   * Submit a new point feature (curb ramp or traffic calming) placed by the user.
+   * Written to geometry_edits with edit_type='add_node'.
+   */
+  async submitNewPointFeature(
+    subtype: 'ramp' | 'calm',
+    coord: [number, number],
+    attributes: Record<string, string>,
+    tripId: string,
+    userId: string,
+  ): Promise<void> {
+    await this.submitGeometryEdit(
+      {
+        editType: 'add_node',
+        streetGridId: undefined,
+        payload: { subtype, coord, attributes },
+        coord,
+      },
+      tripId,
+      userId,
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // FEATURE EDITS (unified table — ratings, corrections, attributes)
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * Submit a feature edit (rating or correction) to Supabase and cache locally.
+   */
+  async submitFeatureEdit(
+    edit: {
+      editType: 'rate' | 'correct_attributes' | 'correct_geometry';
+      streetGridId: string;
+      geometry: any;
+      editedAttributes?: Record<string, unknown>;
+      rating?: number;
+      coord: [number, number];
+    },
+    tripId: string,
+    userId: string,
+  ): Promise<void> {
+    const featureEdit = {
+      userId,
+      tripId,
+      editType: edit.editType,
+      streetGridId: edit.streetGridId,
+      geometry: edit.geometry,
+      editedAttributes: edit.editedAttributes || null,
+      rating: edit.rating ?? null,
+      coord: edit.coord,
+    };
+
+    await DataService.writeFeatureEdit(featureEdit);
+
+    // Cache locally for offline display
+    const cacheKey = '@dataranger/pendingFeatureEdits';
+    const existing = await AsyncStorage.getItem(cacheKey);
+    const edits = existing ? JSON.parse(existing) : [];
+    edits.push({ ...featureEdit, createdAt: new Date().toISOString(), status: 'pending' });
+    await AsyncStorage.setItem(cacheKey, JSON.stringify(edits));
+  }
+
+  /**
+   * Get locally cached pending feature edits for display on home screen.
+   */
+  async getPendingFeatureEdits(): Promise<any[]> {
+    const cacheKey = '@dataranger/pendingFeatureEdits';
+    const raw = await AsyncStorage.getItem(cacheKey);
+    return raw ? JSON.parse(raw) : [];
+  }
+
+  /**
+   * Sync feature edit statuses from server, remove applied ones from local cache.
+   */
+  async syncFeatureEditStatuses(): Promise<{ conflicts: any[] }> {
+    const cacheKey = '@dataranger/pendingFeatureEdits';
+    const raw = await AsyncStorage.getItem(cacheKey);
+    if (!raw) return { conflicts: [] };
+
+    const localEdits = JSON.parse(raw);
+    const serverEdits = await DataService.getUserFeatureEdits();
+
+    const serverMap = new Map(serverEdits.map((e: any) => [e.streetGridId + e.editType, e]));
+    const conflicts: any[] = [];
+    const stillPending: any[] = [];
+
+    for (const local of localEdits) {
+      const server = serverMap.get(local.streetGridId + local.editType);
+      if (!server || server.status === 'pending') {
+        stillPending.push(local);
+      } else if (server.status === 'conflict') {
+        conflicts.push(server);
+      }
+      // 'applied' edits drop out of local cache
+    }
+
+    await AsyncStorage.setItem(cacheKey, JSON.stringify(stillPending));
+    return { conflicts };
+  }
+
+  /**
+   * Get all feature edits for the current user (for Home Screen display).
+   */
+  async getUserFeatureEdits(): Promise<FeatureEdit[]> {
+    return DataService.getUserFeatureEdits();
+  }
+
+  /**
+   * Get feature edits for a specific trip.
+   */
+  async getFeatureEditsForTrip(tripId: string): Promise<FeatureEdit[]> {
+    return DataService.getFeatureEditsForTrip(tripId);
+  }
+
+  /**
+   * Submit a GPS-recorded segment correction.
+   * Stores the recorded polyline as a geometry correction in feature_edits.
+   */
+  async submitSegmentCorrection(
+    tripId: string,
+    userId: string,
+    streetGridId: string,
+    recordedPolyline: GeoJSON.LineString,
+    coord: [number, number],
+  ): Promise<void> {
+    return this.submitFeatureEdit({
+      editType: 'correct_geometry',
+      streetGridId,
+      geometry: recordedPolyline,
+      coord,
+    }, tripId, userId);
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // MAP ADAPTER (for @proximity/shared tool integration)
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * Get a segment pair info by looking up loaded segments.
+   * Used by merge_segments tool when rnMapboxAdapter can't query by ID.
+   */
+  getSegmentPairInfo(seg1Id: string, seg2Id: string): { sharedNodeId: string | null; sharedCoord: [number, number] | null } | null {
+    const seg1 = this.segmentMap.get(seg1Id);
+    const seg2 = this.segmentMap.get(seg2Id);
+    if (!seg1 || !seg2) return null;
+
+    // Check if segments share an endpoint by comparing start/end node coordinates
+    const seg1Geom = seg1.street?.geometry;
+    const seg2Geom = seg2.street?.geometry;
+    if (!seg1Geom || !seg2Geom) return null;
+
+    const getEndpoints = (geom: GeoJSON.LineString | GeoJSON.MultiLineString): [number, number][] => {
+      if (geom.type === 'LineString') {
+        const coords = geom.coordinates;
+        return [coords[0] as [number, number], coords[coords.length - 1] as [number, number]];
+      }
+      return [];
+    };
+
+    if (seg1Geom.type !== 'LineString' || seg2Geom.type !== 'LineString') return null;
+
+    const eps1 = getEndpoints(seg1Geom);
+    const eps2 = getEndpoints(seg2Geom);
+    const tolerance = 0.00001; // ~1m
+
+    for (const p1 of eps1) {
+      for (const p2 of eps2) {
+        if (Math.abs(p1[0] - p2[0]) < tolerance && Math.abs(p1[1] - p2[1]) < tolerance) {
+          return {
+            sharedNodeId: `${p1[0].toFixed(6)}_${p1[1].toFixed(6)}`,
+            sharedCoord: p1,
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // TRIP LIFECYCLE
+  // ═══════════════════════════════════════════════════════════
+
   startTrip(tripId: string): void {
     this.currentTripId = tripId;
     this.ratedFeatures.clear();
     this.queryCache.clear();
   }
 
-  /**
-   * End the current trip. Clears all trip state.
-   */
   endTrip(): void {
     this.currentTripId = null;
     this.ratedFeatures.clear();
     this.queryCache.clear();
   }
 
-  /**
-   * Get total number of ratings across all trips for the current user.
-   */
   async getUserRatingCount(): Promise<number> {
     try {
       const ratings = await DataService.getUserRatings();
@@ -643,42 +1046,59 @@ class DataRangerServiceClass {
     }
   }
 
-  /**
-   * Get number of features rated in the current trip.
-   */
   getRatedCountForCurrentTrip(): number {
     return this.ratedFeatures.size;
   }
 
-  /**
-   * Get the existing rating for a feature in the current trip, or null.
-   */
   getExistingRating(crisId: string | undefined): number | null {
     if (!crisId) return null;
     return this.ratedFeatures.get(crisId) ?? null;
   }
 
-  /**
-   * Whether the service is initialized and ready.
-   */
-  isReady(): boolean {
-    return this.isInitialized;
+  async getSegmentEditCountForTrip(tripId: string): Promise<number> {
+    try {
+      const edits = await DataService.getSegmentEditsForTrip(tripId);
+      return edits.length;
+    } catch {
+      return 0;
+    }
   }
 
-  /**
-   * Release all resources and optionally clear cache.
-   */
-  cleanup(clearCache: boolean = false): void {
+  // ═══════════════════════════════════════════════════════════
+  // CACHE & CLEANUP
+  // ═══════════════════════════════════════════════════════════
+
+  async clearCache(): Promise<void> {
+    try {
+      const file = new File(Paths.document, this.PARQUET_FILE_NAME);
+      if (file.exists) {
+        file.delete();
+      }
+      await AsyncStorage.removeItem(this.PROXIMITY_VERSION_KEY);
+      console.log('[DataRangerService] Cache cleared');
+    } catch (error) {
+      console.warn('[DataRangerService] Failed to clear cache:', error);
+    }
+  }
+
+  cleanup(clearCacheOnCleanup: boolean = false): void {
     console.log('[DataRangerService] Cleaning up...');
-    this.features = [];
-    this.spatialIndex = null;
     this.queryCache.clear();
     this.ratedFeatures.clear();
     this.currentTripId = null;
+
+    this.segments = [];
+    this.segmentIndex = null;
+    this.segmentMap.clear();
+    this.loadedCells.clear();
+    this.loadingCells.clear();
+    this.parquetBuffer = null;
+    this.gridOrigin = null;
+    this.gridCellIndex = null;
     this.isInitialized = false;
-    
-    if (clearCache) {
-      this.clearCache().catch(err => 
+
+    if (clearCacheOnCleanup) {
+      this.clearCache().catch(err =>
         console.warn('[DataRangerService] Failed to clear cache during cleanup:', err)
       );
     }
@@ -686,9 +1106,6 @@ class DataRangerServiceClass {
 
   // --- Private helpers ---
 
-  /**
-   * Haversine distance in meters between two coordinates.
-   */
   private calculateDistance(
     lat1: number,
     lon1: number,
@@ -709,51 +1126,12 @@ class DataRangerServiceClass {
     return R * c;
   }
 
-  /**
-   * Convert InternalFeature to MapViewComponent Feature.
-   */
-  private toMapFeature(f: InternalFeature): Feature {
-    const isRated = this.ratedFeatures.has(f.id);
-    const userRating = this.ratedFeatures.get(f.id);
-    
-    // Debug: Log first few rated features
-    if (isRated && this.debugRatedCount < 3) {
-      console.log('[DataRangerService] toMapFeature - Rated feature:', {
-        id: f.id,
-        isRated,
-        userRating,
-        ratedFeaturesSize: this.ratedFeatures.size,
-      });
-      this.debugRatedCount++;
-    }
-    
-    return {
-      id: f.id,
-      coordinate: [f.lon, f.lat],
-      type: 'curb_ramp',
-      properties: {
-        location_description: f.location_description,
-        condition_score: f.condition_score,
-        location_in_intersection: f.location_in_intersection,
-        position_on_curb: f.position_on_curb,
-        rated: isRated,
-        ...(userRating !== undefined && { userRating }), // Only include if defined
-      },
-    };
-  }
-
-  /**
-   * Generate cache key from coordinates (rounded to ~100m precision).
-   */
   private getCacheKey(lat: number, lon: number): string {
     const roundedLat = Math.round(lat * 1000) / 1000;
     const roundedLon = Math.round(lon * 1000) / 1000;
     return `${roundedLat}_${roundedLon}`;
   }
 
-  /**
-   * Cache query result with LRU eviction.
-   */
   private cacheQueryResult(
     key: string,
     features: Feature[],
@@ -769,9 +1147,6 @@ class DataRangerServiceClass {
     this.queryCache.set(key, { features, location: { lat, lon } });
   }
 
-  /**
-   * Validate coordinate values.
-   */
   private isValidCoordinate(lat: number, lon: number): boolean {
     return (
       typeof lat === 'number' &&

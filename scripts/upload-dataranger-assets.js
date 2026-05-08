@@ -29,16 +29,11 @@ const BUCKET_NAME = 'dataranger-assets';
 // Asset files to upload
 const ASSETS = [
   {
-    name: 'CurbRamps',
-    localPath: 'assets/data/curb_ramps.geojson',
-    remotePath: 'curb_ramps.geojson',
-    description: 'San Francisco CRIS curb ramp condition data',
-  },
-  {
-    name: 'Sidewalks',
-    localPath: 'assets/data/sidewalks.geojson',
-    remotePath: 'sidewalks.geojson',
-    description: 'AI-generated sidewalk network data from Tile2Net/CitySurfaces',
+    name: 'ProximityNetwork',
+    localPath: process.env.PROXIMITY_PARQUET_PATH || 'C:/Dev/Proximity/Output/San_Francisco_County_California_USA_network.parquet',
+    remotePath: 'San_Francisco_County_California_USA_network.parquet',
+    contentType: 'application/octet-stream',
+    description: 'Proximity graph network parquet — all segment/feature data (streets, sidewalks, bikeways, curb ramps)',
   },
 ];
 
@@ -57,7 +52,7 @@ async function uploadAssets() {
   console.log('🚀 Starting DataRanger asset upload...\n');
 
   for (const asset of ASSETS) {
-    const fullPath = path.join(process.cwd(), asset.localPath);
+    const fullPath = path.resolve(asset.localPath);
 
     // Check if file exists
     if (!fs.existsSync(fullPath)) {
@@ -79,7 +74,7 @@ async function uploadAssets() {
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from(BUCKET_NAME)
         .upload(asset.remotePath, fileBuffer, {
-          contentType: 'application/geo+json',
+          contentType: asset.contentType || 'application/octet-stream',
           upsert: true, // Overwrite if exists
         });
 

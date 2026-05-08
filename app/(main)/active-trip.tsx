@@ -13,8 +13,12 @@
  */
 
 import { NativeAdapter } from '@/adapters/NativeAdapter';
+import { DataRangerToolPanels, type DataRangerToolPanelsRef } from '@/components/DataRangerToolPanels';
+import type { EditPreviewFeature } from '@/hooks/useToolGesture';
+import type * as GeoJSON from 'geojson';
 import { Feature, MapViewComponentRef, Polyline } from '@/components/MapViewComponent';
 import { RecenterButton } from '@/components/RecenterButton';
+import { SegmentEditCallout } from '@/components/SegmentEditCallout';
 import { PostTripResult, TripModal } from '@/components/TripModal';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -23,12 +27,14 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { BasemapLayout } from '@/layouts/BasemapLayout';
 import { DataRangerService } from '@/services/DataRangerService';
+import type { RnMapboxAdapterInstance } from '@/services/rnMapboxAdapter';
 import { SyncService } from '@/services/SyncService';
 import { ActiveTripData, TripService } from '@/services/TripService';
+import type { FacilityType, NetworkSegment } from '@/services/types/NetworkSegment';
 import { mediumImpact, warningNotification } from '@/utils/haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     Alert,
     Platform,
@@ -47,6 +53,8 @@ export default function ActiveTripScreen() {
   }>();
   const { user } = useAuth();
   const mapRef = useRef<MapViewComponentRef>(null);
+  const toolPanelsRef = useRef<DataRangerToolPanelsRef>(null);
+  const [mapAdapter, setMapAdapter] = useState<RnMapboxAdapterInstance | null>(null);
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const errorColor = colors.error;
@@ -75,7 +83,24 @@ export default function ActiveTripScreen() {
   // DataRanger state (only active when user.dataRangerMode is true)
   const isDataRanger = user?.dataRangerMode ?? false;
   const [nearbyFeatures, setNearbyFeatures] = useState<Feature[]>([]);
+  const [nearbySegments, setNearbySegments] = useState<NetworkSegment[]>([]);
   const [ratedCount, setRatedCount] = useState(0);
+
+  // Segment edit callout state
+  const [selectedSegment, setSelectedSegment] = useState<NetworkSegment | null>(null);
+  const [selectedFacilityType, setSelectedFacilityType] = useState<FacilityType>('street');
+  const [showSegmentCallout, setShowSegmentCallout] = useState(false);
+
+  // New segment recording state
+  const [isRecordingSegment, setIsRecordingSegment] = useState(false);
+  const [segmentStartCoordIndex, setSegmentStartCoordIndex] = useState<number>(-1);
+  const [pendingSegmentFacility, setPendingSegmentFacility] = useState<FacilityType>('street');
+  const [pendingSegmentAttributes, setPendingSegmentAttributes] = useState<Record<string, string>>({});
+  const [showNewSegmentModal, setShowNewSegmentModal] = useState(false);
+
+  // Edit preview features (pending add_node placement, etc.)
+  // Stored as EditPreviewFeature[] (the internal shape); converted to GeoJSON.Feature[] at render.
+  const [editPreviews, setEditPreviews] = useState<EditPreviewFeature[]>([]);
 
   // Initialize SyncService on mount
   useEffect(() => {
@@ -241,13 +266,42 @@ export default function ActiveTripScreen() {
     };
   }, []);
 
-  // DataRanger: query nearby features when user position changes
+  // Once map is ready, grab the adapter from MapViewComponent
+  useEffect(() => {
+    if (!isDataRanger || isLoading) return;
+    const adapter = mapRef.current?.getAdapter() ?? null;
+    setMapAdapter(adapter);
+  }, [isDataRanger, isLoading]);
+
+  // Forward raw map taps/long-presses to tool panels
+  const handleMapTap = useCallback((coords: { longitude: number; latitude: number }) => {
+    toolPanelsRef.current?.onMapTap(coords);
+  }, []);
+
+  const handleMapLongPress = useCallback((coords: { longitude: number; latitude: number }) => {
+    toolPanelsRef.current?.onMapLongPress(coords);
+  }, []);
+
+  // DataRanger: load nearby grid cells and query features when user position changes
   useEffect(() => {
     if (!isDataRanger || !userPosition || !tripData) return;
 
     const [lon, lat] = userPosition;
-    const features = DataRangerService.queryNearbyFeatures(lat, lon);
-    setNearbyFeatures(features);
+
+    // Load grid cells near user position (async), then query synchronously
+    const loadAndQuery = async () => {
+      await DataRangerService.loadGridCellsNearPoint(lat, lon);
+
+      const features = DataRangerService.queryNearbyFeatures(lat, lon);
+      setNearbyFeatures(features);
+
+      if (DataRangerService.isProximityReady()) {
+        const segments = DataRangerService.queryNearbySegments(lat, lon);
+        setNearbySegments(segments);
+      }
+    };
+
+    loadAndQuery();
   }, [userPosition, isDataRanger, tripData]);
 
   // DataRanger: handle rating submission from callout
@@ -277,6 +331,82 @@ export default function ActiveTripScreen() {
       Alert.alert('Error', 'Failed to submit rating. Please try again.');
     }
   };
+
+  // DataRanger: handle segment tap from map
+  const handleSegmentPress = (segment: NetworkSegment, facilityType: FacilityType) => {
+    setSelectedSegment(segment);
+    setSelectedFacilityType(facilityType);
+    setShowSegmentCallout(true);
+  };
+
+  // DataRanger: handle segment edit submission
+  const handleSegmentEditSubmit = async (edit: Omit<import('@/services/types/NetworkSegment').SegmentEdit, 'tripId' | 'userId' | 'id' | 'createdAt'>) => {
+    if (!tripData || !user) return;
+
+    await DataRangerService.submitSegmentEdit({
+      ...edit,
+      tripId: tripData.metadata.tripId,
+      userId: user.id,
+    });
+  };
+
+  // DataRanger: new segment — user selected facility type, open attribute modal
+  const handleNewSegmentRequest = useCallback((facilityType: FacilityType) => {
+    setPendingSegmentFacility(facilityType);
+    setShowNewSegmentModal(true);
+  }, []);
+
+  // DataRanger: user submitted attributes for new segment — start GPS recording
+  const handleStartRecording = useCallback((attributes: Record<string, string>, facilityType: FacilityType) => {
+    setShowNewSegmentModal(false);
+    setPendingSegmentAttributes(attributes);
+    setPendingSegmentFacility(facilityType);
+    setSegmentStartCoordIndex(tripData?.coordinates.length ?? 0);
+    setIsRecordingSegment(true);
+  }, [tripData]);
+
+  // DataRanger: stop recording — slice trip polyline, submit geometry edit
+  const handleStopRecording = useCallback(async () => {
+    if (!tripData || !user) return;
+    const coords = tripData.coordinates;
+    const startIdx = Math.max(0, segmentStartCoordIndex);
+    const endIdx = coords.length - 1;
+    const slice = coords.slice(startIdx, endIdx + 1);
+
+    if (slice.length >= 2) {
+      try {
+        await DataRangerService.submitNewSegment(
+          { type: 'LineString', coordinates: slice },
+          pendingSegmentFacility,
+          pendingSegmentAttributes,
+          tripData.metadata.tripId,
+          user.id,
+        );
+      } catch (err) {
+        console.error('[ActiveTripScreen] Failed to submit new segment:', err);
+        Alert.alert('Error', 'Failed to save segment. Please try again.');
+      }
+    }
+
+    setIsRecordingSegment(false);
+    setSegmentStartCoordIndex(-1);
+    setPendingSegmentAttributes({});
+  }, [tripData, user, segmentStartCoordIndex, pendingSegmentFacility, pendingSegmentAttributes]);
+
+  // DataRanger: add_node confirm from tool panels
+  const handleAddNodeSubmit = useCallback(async (
+    subtype: 'ramp' | 'calm',
+    coords: [number, number],
+    attributes: Record<string, string>,
+  ) => {
+    if (!tripData || !user) return;
+    try {
+      await DataRangerService.submitNewPointFeature(subtype, coords, attributes, tripData.metadata.tripId, user.id);
+    } catch (err) {
+      console.error('[ActiveTripScreen] Failed to submit new point feature:', err);
+      Alert.alert('Error', 'Failed to save point feature. Please try again.');
+    }
+  }, [tripData, user]);
 
   // Helper: Calculate distance between two coordinates (Haversine formula)
   const calculateDistance = (
@@ -370,6 +500,7 @@ export default function ActiveTripScreen() {
     if (isDataRanger) {
       DataRangerService.endTrip();
       setNearbyFeatures([]);
+      setNearbySegments([]);
     }
 
     try {
@@ -527,42 +658,59 @@ export default function ActiveTripScreen() {
     <RecenterButton onPress={handleRecenter} position="secondary-footer" />
   );
 
-  // Render footer with trip controls
-  const renderFooter = () => (
-    <View style={[styles.footerContainer, { backgroundColor: colors.background }]}>
-      {/* Pause/Resume Button */}
-      <TouchableOpacity
-        style={[
-          styles.controlButton,
-          styles.pauseButton,
-          { backgroundColor: isPaused ? colors.buttonPrimary : colors.icon },
-        ]}
-        onPress={handlePauseResume}
-        activeOpacity={0.8}
-      >
-        <Ionicons name={isPaused ? 'play' : 'pause'} size={28} color={colors.buttonText} />
-        <ThemedText style={[styles.buttonText, { color: colors.buttonText }]}>
-          {isPaused ? 'Resume' : 'Pause'}
-        </ThemedText>
-      </TouchableOpacity>
+  // Render footer — overridden to "Stop Recording" while a segment is being recorded
+  const renderFooter = () => {
+    if (isRecordingSegment) {
+      return (
+        <View style={[styles.footerContainer, { backgroundColor: colors.background }]}>
+          <TouchableOpacity
+            style={[styles.controlButton, { flex: 1, backgroundColor: '#e53935' }]}
+            onPress={handleStopRecording}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="stop-circle" size={28} color="#fff" />
+            <ThemedText style={[styles.buttonText, { color: '#fff' }]}>Stop Recording</ThemedText>
+          </TouchableOpacity>
+        </View>
+      );
+    }
 
-      {/* Stop Button */}
-      <TouchableOpacity
-        style={[
-          styles.controlButton,
-          styles.stopButton,
-          { backgroundColor: colors.buttonDanger },
-        ]}
-        onPress={handleStopTrip}
-        activeOpacity={0.8}
-      >
-        <Ionicons name="stop" size={28} color={colors.buttonText} />
-        <ThemedText style={[styles.buttonText, { color: colors.buttonText }]}>
-          Stop Trip
-        </ThemedText>
-      </TouchableOpacity>
-    </View>
-  );
+    return (
+      <View style={[styles.footerContainer, { backgroundColor: colors.background }]}>
+        {/* Pause/Resume Button */}
+        <TouchableOpacity
+          style={[
+            styles.controlButton,
+            styles.pauseButton,
+            { backgroundColor: isPaused ? colors.buttonPrimary : colors.icon },
+          ]}
+          onPress={handlePauseResume}
+          activeOpacity={0.8}
+        >
+          <Ionicons name={isPaused ? 'play' : 'pause'} size={28} color={colors.buttonText} />
+          <ThemedText style={[styles.buttonText, { color: colors.buttonText }]}>
+            {isPaused ? 'Resume' : 'Pause'}
+          </ThemedText>
+        </TouchableOpacity>
+
+        {/* Stop Button */}
+        <TouchableOpacity
+          style={[
+            styles.controlButton,
+            styles.stopButton,
+            { backgroundColor: colors.buttonDanger },
+          ]}
+          onPress={handleStopTrip}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="stop" size={28} color={colors.buttonText} />
+          <ThemedText style={[styles.buttonText, { color: colors.buttonText }]}>
+            Stop Trip
+          </ThemedText>
+        </TouchableOpacity>
+      </View>
+    );
+  };
 
   return (
     <>
@@ -570,7 +718,18 @@ export default function ActiveTripScreen() {
         ref={mapRef}
         polylines={[currentPolyline]}
         features={isDataRanger ? nearbyFeatures : undefined}
+        segments={isDataRanger ? nearbySegments : undefined}
         onRatingSubmit={isDataRanger ? handleRatingSubmit : undefined}
+        onSegmentPress={isDataRanger ? handleSegmentPress : undefined}
+        onMapTap={isDataRanger ? handleMapTap : undefined}
+        onMapLongPress={isDataRanger ? handleMapLongPress : undefined}
+        previewFeatures={isDataRanger && editPreviews.length > 0
+          ? editPreviews.map(ep => ({
+              type: 'Feature' as const,
+              geometry: ep.geometry as GeoJSON.Geometry,
+              properties: { editType: ep.editType, ...ep.props },
+            }))
+          : undefined}
         userPosition={userPosition}
         showUserLocation={true}
         zoomLevel={16}
@@ -578,6 +737,19 @@ export default function ActiveTripScreen() {
         secondaryFooter={renderSecondaryFooter()}
         footer={renderFooter()}
       />
+      {/* Tool panels hidden while recording a segment */}
+      {isDataRanger && !isRecordingSegment && (
+        <DataRangerToolPanels
+          ref={toolPanelsRef}
+          isDataRangerMode={isDataRanger}
+          adapter={mapAdapter}
+          onSourceMutation={() => {}}
+          onEditPreviewsChange={setEditPreviews}
+          onChangeset={(_type, _data) => {}}
+          onNewSegmentRequest={handleNewSegmentRequest}
+          onAddNodeSubmit={handleAddNodeSubmit}
+        />
+      )}
       <TripModal
         visible={showPostTripModal}
         postTripMode={true}
@@ -585,6 +757,31 @@ export default function ActiveTripScreen() {
         onStartTrip={() => {}}
         onPostTripComplete={handlePostTripComplete}
       />
+      {/* Existing segment attribute editor */}
+      {isDataRanger && (
+        <SegmentEditCallout
+          visible={showSegmentCallout}
+          segment={selectedSegment}
+          facilityType={selectedFacilityType}
+          onClose={() => {
+            setShowSegmentCallout(false);
+            setSelectedSegment(null);
+          }}
+          onSubmitEdit={handleSegmentEditSubmit}
+        />
+      )}
+      {/* New segment attribute capture — opens before GPS recording begins */}
+      {isDataRanger && (
+        <SegmentEditCallout
+          visible={showNewSegmentModal}
+          segment={null}
+          facilityType={pendingSegmentFacility}
+          mode="new"
+          onClose={() => setShowNewSegmentModal(false)}
+          onSubmitEdit={handleSegmentEditSubmit}
+          onStartRecording={handleStartRecording}
+        />
+      )}
     </>
   );
 }

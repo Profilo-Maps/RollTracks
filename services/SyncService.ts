@@ -1,6 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo, { NetInfoState, NetInfoSubscription } from '@react-native-community/netinfo';
+import * as polyline from '@mapbox/polyline';
 import { DataService, Trip } from '../adapters/DatabaseAdapter';
+import { clipTripToBlocks } from './utils/clipTripGeometry';
 
 // ═══════════════════════════════════════════════════════════
 // SYNC SERVICE
@@ -476,35 +478,107 @@ class SyncServiceClass {
   /**
    * Upload a single trip to the database via DataService.
    */
+  /**
+   * Attempt to clip the trip geometry client-side using census block lookups.
+   * Returns a mutated copy of tripData with clipped geometry and od_geoids set,
+   * or the original tripData unchanged if clipping is not possible.
+   */
+  private async clipTripData(tripData: Omit<Trip, 'tripId'>): Promise<Omit<Trip, 'tripId'>> {
+    const encoded = tripData.geometry;
+    if (!encoded || typeof encoded !== 'string') return tripData;
+
+    // Decode polyline: @mapbox/polyline returns [lat, lon][]
+    let latLonPairs: [number, number][];
+    try {
+      latLonPairs = polyline.decode(encoded) as [number, number][];
+    } catch {
+      console.warn('[SyncService] Failed to decode polyline for clipping, uploading as-is');
+      return tripData;
+    }
+
+    if (latLonPairs.length < 2) return tripData;
+
+    // Polyline is [lat, lon]; convert to [lon, lat] for GeoJSON / PostGIS RPC
+    const [startLat, startLon] = latLonPairs[0];
+    const [endLat, endLon] = latLonPairs[latLonPairs.length - 1];
+
+    // Look up census blocks for origin and destination
+    const [originBlock, destBlock] = await Promise.all([
+      DataService.getBlockForPoint(startLon, startLat),
+      DataService.getBlockForPoint(endLon, endLat),
+    ]);
+
+    if (!originBlock || !destBlock) {
+      // Unmatched trip — upload full geometry without od_geoids
+      console.log(`[SyncService] OD blocks not found (origin=${!!originBlock}, dest=${!!destBlock}), uploading full geometry`);
+      return tripData;
+    }
+
+    console.log(`[SyncService] Clipping trip to blocks: origin=${originBlock.geoid}, dest=${destBlock.geoid}`);
+
+    // Convert to [lon, lat] for clipping
+    const lonLatCoords = latLonPairs.map(([lat, lon]) => [lon, lat] as [number, number]);
+    const { coordinates: clipped, trimmedFromStart, trimmedFromEnd } = clipTripToBlocks(
+      lonLatCoords,
+      originBlock.polygon,
+      destBlock.polygon,
+    );
+
+    if (clipped.length < 2) {
+      // Trip too short after clipping (e.g. entirely within one block) — upload full
+      console.warn('[SyncService] Trip too short after clipping, uploading full geometry with od_geoids');
+      return {
+        ...tripData,
+        odGeoids: [originBlock.geoid, destBlock.geoid],
+      };
+    }
+
+    // Re-encode clipped coordinates: polyline.encode expects [lat, lon][]
+    const clippedLatLon = clipped.map(([lon, lat]) => [lat, lon] as [number, number]);
+    const clippedEncoded = polyline.encode(clippedLatLon);
+
+    // Clip relativeTimes to match trimmed coordinates
+    let clippedRelativeTimes = tripData.relativeTimes;
+    if (tripData.relativeTimes && tripData.relativeTimes.length === latLonPairs.length) {
+      clippedRelativeTimes = tripData.relativeTimes.slice(
+        trimmedFromStart,
+        tripData.relativeTimes.length - trimmedFromEnd,
+      );
+    }
+
+    console.log(`[SyncService] Clipped ${trimmedFromStart} points from start, ${trimmedFromEnd} from end`);
+
+    return {
+      ...tripData,
+      geometry: clippedEncoded,
+      relativeTimes: clippedRelativeTimes,
+      odGeoids: [originBlock.geoid, destBlock.geoid],
+    };
+  }
+
   private async uploadTrip(
     queueId: string,
     tripData: Omit<Trip, 'tripId'>
   ): Promise<Trip> {
     try {
       console.log(`[SyncService] Attempting upload for ${queueId}`);
-      console.log(`[SyncService] Trip data:`, {
-        userId: tripData.userId,
-        mode: tripData.mode,
-        geometryType: tripData.geometry?.type,
-        coordinateCount: Array.isArray((tripData.geometry as any)?.coordinates) 
-          ? (tripData.geometry as any).coordinates.length 
-          : 0,
-      });
-      
+
+      // Clip geometry client-side before upload
+      const clippedData = await this.clipTripData(tripData);
+
       // Call DataService to write to Supabase
-      const savedTrip = await DataService.writeTrip(tripData);
-      
+      const savedTrip = await DataService.writeTrip(clippedData);
+
       console.log(`[SyncService] Upload successful for ${queueId}, server trip_id: ${savedTrip.tripId}`);
       return savedTrip;
     } catch (error) {
       console.error(`[SyncService] Upload failed for ${queueId}:`, error);
-      
-      // Log more details about the error
+
       if (error instanceof Error) {
         console.error(`[SyncService] Error message: ${error.message}`);
         console.error(`[SyncService] Error stack:`, error.stack);
       }
-      
+
       throw error;
     }
   }

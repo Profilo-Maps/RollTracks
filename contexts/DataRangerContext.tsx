@@ -1,13 +1,14 @@
 import { DataRangerService } from '@/services/DataRangerService';
-import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
+import React, { createContext, ReactNode, useContext, useEffect, useRef, useState } from 'react';
+import { InteractionManager } from 'react-native';
 import { useAuth } from './AuthContext';
 
 // ═══════════════════════════════════════════════════════════
 // DATA RANGER CONTEXT
 // ═══════════════════════════════════════════════════════════
-// Manages DataRanger mode state and feature data initialization.
-// When DataRanger mode is enabled, downloads and caches curb ramp
-// features from Supabase Storage, checking for updates on app launch.
+// Manages DataRanger mode state and proximity network initialization.
+// When DataRanger mode is enabled, downloads and caches the proximity
+// parquet from Supabase Storage, checking for updates on app launch.
 
 interface DataRangerContextType {
   isDataRangerMode: boolean;
@@ -23,37 +24,39 @@ export function DataRangerProvider({ children }: { children: ReactNode }) {
   const [isInitializing, setIsInitializing] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const taskRef = useRef<ReturnType<typeof InteractionManager.runAfterInteractions> | null>(null);
 
   // DataRanger mode comes from user profile
   const isDataRangerMode = user?.dataRangerMode ?? false;
 
   useEffect(() => {
-    async function initializeDataRanger() {
-      // Wait for user to be loaded before checking DataRanger mode
-      if (!user) {
-        // User not loaded yet, don't initialize
-        if (isReady) {
-          DataRangerService.cleanup(false);
-          setIsReady(false);
-        }
-        return;
+    // Cancel any pending deferred task when dependencies change
+    taskRef.current?.cancel();
+
+    if (!user) {
+      if (isReady) {
+        DataRangerService.cleanup(false);
+        setIsReady(false);
       }
+      return;
+    }
 
-      if (!isDataRangerMode) {
-        // DataRanger mode is off, cleanup if needed
-        if (isReady) {
-          DataRangerService.cleanup(false); // Don't clear cache, user might re-enable
-          setIsReady(false);
-        }
-        return;
+    if (!isDataRangerMode) {
+      if (isReady) {
+        DataRangerService.cleanup(false);
+        setIsReady(false);
       }
+      return;
+    }
 
-      // DataRanger mode is on, initialize features
-      setIsInitializing(true);
-      setError(null);
+    // Defer parquet initialization until after the map and any entrance
+    // animations have fully rendered, so the basemap appears immediately.
+    setIsInitializing(true);
+    setError(null);
 
+    taskRef.current = InteractionManager.runAfterInteractions(async () => {
       try {
-        // Check for updates on initialization
+        console.log('[DataRangerContext] Starting background parquet initialization...');
         await DataRangerService.initialize(true);
         setIsReady(true);
         console.log('[DataRangerContext] DataRanger features initialized');
@@ -64,9 +67,11 @@ export function DataRangerProvider({ children }: { children: ReactNode }) {
       } finally {
         setIsInitializing(false);
       }
-    }
+    });
 
-    initializeDataRanger();
+    return () => {
+      taskRef.current?.cancel();
+    };
   }, [isDataRangerMode, user]);
 
   return (
