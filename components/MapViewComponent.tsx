@@ -3,7 +3,7 @@ import { Fonts } from '@/constants/theme';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { createRnMapboxAdapter, type RnMapboxAdapterInstance } from '@/services/rnMapboxAdapter';
 import type { NetworkSegment, FacilityType } from '@/services/types/NetworkSegment';
-import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 import { DataRangerCallout } from './DataRangerCallout';
 
@@ -143,13 +143,30 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
     const [selectedFeature, setSelectedFeature] = useState<Feature | null>(null);
     const [showCallout, setShowCallout] = useState(false);
     const cameraRef = useRef<any>(null);
-    const [isMapReady, setIsMapReady] = useState(false);
-
     // Create the RnMapboxAdapter backed by the internal mapRef
     const adapterRef = useRef<RnMapboxAdapterInstance | null>(null);
     if (adapterRef.current === null) {
       adapterRef.current = createRnMapboxAdapter(mapRef);
     }
+
+    // Delay Mapbox GL mount until we have a center or a 3 s timeout expires.
+    // Mounting immediately at startup causes a native GL context crash on
+    // memory-constrained devices (emulators) before auth/map state settles.
+    const [isMapReady, setIsMapReady] = useState(false);
+    const readyRef = useRef(false);
+    const markReady = useCallback(() => {
+      if (!readyRef.current) { readyRef.current = true; setIsMapReady(true); }
+    }, []);
+
+    useEffect(() => {
+      if (centerPosition || userPosition || gpsError) markReady();
+    }, [centerPosition, userPosition, gpsError, markReady]);
+
+    // Fallback: show at DEFAULT_CENTER after 3 s so GPS-less devices don't spin forever
+    useEffect(() => {
+      const id = setTimeout(markReady, 3000);
+      return () => clearTimeout(id);
+    }, [markReady]);
 
     // Theme colors
     const backgroundColor = useThemeColor({}, 'background');
@@ -164,14 +181,6 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
       }
     }, []);
 
-    // Determine if map should be shown
-    // Show map when: centerPosition is provided, OR userPosition is available, OR there's a GPS error (fallback to default)
-    useEffect(() => {
-      if (centerPosition || userPosition || gpsError) {
-        setIsMapReady(true);
-      }
-    }, [centerPosition, userPosition, gpsError]);
-
     // Update camera when user position changes (only if no explicit centerPosition)
     useEffect(() => {
       if (cameraRef.current && userPosition && !centerPosition && isMapReady) {
@@ -184,8 +193,8 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
       }
     }, [userPosition, centerPosition, zoomLevel, isMapReady]);
 
-    // Determine the center: props centerPosition > userPosition > default (only if GPS error)
-    const mapCenter = centerPosition ?? userPosition ?? (gpsError ? DEFAULT_CENTER : null);
+    // Determine the center: props centerPosition > userPosition > default
+    const mapCenter = centerPosition ?? userPosition ?? DEFAULT_CENTER;
 
     // Handle recentering to user position
     const handleRecenter = () => {
@@ -384,6 +393,15 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
     onFeaturePress?.(rampFeature);
   };
 
+  // Hold off mounting Mapbox GL until ready — avoids native GL crash on startup
+  if (!isMapReady) {
+    return (
+      <View style={[styles.container, styles.placeholderContainer, { backgroundColor }]}>
+        <ActivityIndicator size="large" color={tintColor} />
+      </View>
+    );
+  }
+
   // Show placeholder if Mapbox is not available
   if (!MapboxGL) {
     return (
@@ -393,26 +411,6 @@ export const MapViewComponent = forwardRef<MapViewComponentRef, MapViewComponent
           Mapbox requires a development build.{'\n'}
           Run: npx expo run:android or npx expo run:ios
         </Text>
-      </View>
-    );
-  }
-
-  // Show loading state while waiting for position (unless there's a GPS error or explicit centerPosition)
-  if (!isMapReady) {
-    return (
-      <View style={[styles.container, styles.placeholderContainer, { backgroundColor }]}>
-        <ActivityIndicator size="large" color={tintColor} />
-        <Text style={[styles.loadingText, { color: iconColor }]}>Loading map...</Text>
-      </View>
-    );
-  }
-
-  // Safety check - should not happen due to isMapReady logic, but TypeScript needs it
-  if (!mapCenter) {
-    return (
-      <View style={[styles.container, styles.placeholderContainer, { backgroundColor }]}>
-        <ActivityIndicator size="large" color={tintColor} />
-        <Text style={[styles.loadingText, { color: iconColor }]}>Waiting for location...</Text>
       </View>
     );
   }
@@ -735,13 +733,6 @@ const styles = StyleSheet.create({
     // color applied dynamically
     textAlign: 'center',
     lineHeight: 20,
-  },
-  loadingText: {
-    fontSize: 16,
-    fontFamily: Fonts.regular,
-    // color applied dynamically
-    marginTop: 12,
-    textAlign: 'center',
   },
 });
 

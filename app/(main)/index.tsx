@@ -97,15 +97,13 @@ export default function HomeScreen() {
           })
           .filter((polyline): polyline is Polyline => polyline !== null);
 
-        // Calculate map bounds for trips
-        const mapBounds = calculateMapBounds(tripPolylines);
-
-        // Update map context with trip data
+        // Update map context with trip data.
+        // Do NOT set centerPosition — let GPS auto-pan handle the initial camera
+        // center. Trip polylines are still visible once the user pans/zooms.
         mapContext.updateMapState({
           polylines: tripPolylines,
           features: [],
-          centerPosition: mapBounds?.centerCoordinate,
-          zoomLevel: mapBounds?.zoomLevel ?? 15,
+          zoomLevel: 15,
           interactionState: 'interactive',
           showUserLocation: true,
         });
@@ -130,48 +128,6 @@ export default function HomeScreen() {
       scooter: '#F44336', // Red
     };
     return modeColors[mode.toLowerCase()] ?? '#757575'; // Gray default
-  };
-
-  // Calculate bounding box for all trips to set initial map view
-  const calculateMapBounds = (polylines: Polyline[]): {
-    centerCoordinate: [number, number];
-    zoomLevel: number;
-  } | undefined => {
-    if (polylines.length === 0) return undefined;
-
-    let minLat = Infinity;
-    let maxLat = -Infinity;
-    let minLng = Infinity;
-    let maxLng = -Infinity;
-
-    polylines.forEach((polyline) => {
-      polyline.coordinates.forEach(([lng, lat]) => {
-        minLat = Math.min(minLat, lat);
-        maxLat = Math.max(maxLat, lat);
-        minLng = Math.min(minLng, lng);
-        maxLng = Math.max(maxLng, lng);
-      });
-    });
-
-    const centerLat = (minLat + maxLat) / 2;
-    const centerLng = (minLng + maxLng) / 2;
-
-    // Calculate appropriate zoom level based on bounds
-    const latDiff = maxLat - minLat;
-    const lngDiff = maxLng - minLng;
-    const maxDiff = Math.max(latDiff, lngDiff);
-
-    // Rough zoom level calculation (adjust as needed)
-    let zoomLevel = 15;
-    if (maxDiff > 0.1) zoomLevel = 11;
-    else if (maxDiff > 0.05) zoomLevel = 12;
-    else if (maxDiff > 0.02) zoomLevel = 13;
-    else if (maxDiff > 0.01) zoomLevel = 14;
-
-    return {
-      centerCoordinate: [centerLng, centerLat],
-      zoomLevel,
-    };
   };
 
   // Navigate to profile screen

@@ -32,8 +32,12 @@ export default function TurnstileCaptcha({
   // Auto-pass captcha in development/testing when not configured
   React.useEffect(() => {
     if (!isCaptchaConfigured) {
-      console.warn('Turnstile site key not configured - captcha bypassed for development');
-      onSuccess('dev-bypass-token');
+      if (__DEV__) {
+        console.warn('Turnstile site key not configured - captcha bypassed for development');
+        onSuccess('dev-bypass-token');
+      } else {
+        onError?.();
+      }
     }
   }, [isCaptchaConfigured, onSuccess]);
 

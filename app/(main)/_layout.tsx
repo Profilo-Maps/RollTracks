@@ -1,9 +1,9 @@
 import { NativeAdapter } from '@/adapters/NativeAdapter';
-import { MapViewComponent } from '@/components/MapViewComponent';
+import { MapViewComponent, MapViewComponentRef } from '@/components/MapViewComponent';
 import { MapProvider, useMap } from '@/contexts/MapContext';
 import { Slot } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 
 /**
  * Main Layout with Persistent Map
@@ -32,7 +32,7 @@ export default function MainLayout() {
 
 function MainLayoutContent() {
   const mapContext = useMap();
-  const mapRef = useRef<any>(null);
+  const mapRef = useRef<MapViewComponentRef>(null);
   const [userPosition, setUserPosition] = useState<[number, number] | null>(null);
   const [isReady, setIsReady] = useState(false);
 
@@ -40,6 +40,14 @@ function MainLayoutContent() {
   useEffect(() => {
     setIsReady(true);
   }, []);
+
+  // Request GPS permissions once the main stack is fully mounted.
+  // Android only: requesting during the auth→main navigation transition causes
+  // the app to minimize after the user grants. iOS requests lazily via ensurePermissions.
+  useEffect(() => {
+    if (!isReady || Platform.OS !== 'android') return;
+    NativeAdapter.requestPermissions().catch(() => {});
+  }, [isReady]);
 
   // Track user position and update context
   useEffect(() => {
@@ -72,30 +80,38 @@ function MainLayoutContent() {
 
   // Handle recenter trigger from context
   useEffect(() => {
-    if (mapContext.recenterTrigger > 0 && mapRef.current && userPosition) {
-      // Recenter map to user position
-      mapRef.current.setCamera?.({
-        centerCoordinate: userPosition,
-        zoomLevel: mapContext.zoomLevel ?? 15,
-        animationDuration: 500,
-      });
+    if (mapContext.recenterTrigger > 0 && mapRef.current) {
+      mapRef.current.recenter();
     }
-  }, [mapContext.recenterTrigger, userPosition, mapContext.zoomLevel]);
+  }, [mapContext.recenterTrigger]);
+
+  // Register the map adapter getter with the context so active-trip can access it
+  useEffect(() => {
+    mapContext.registerMapAdapterGetter(() => mapRef.current?.getAdapter() ?? null);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <View style={styles.container}>
       {/* Persistent Map Background - stays mounted across all screens */}
       <View style={styles.mapBackground}>
         <MapViewComponent
+          ref={mapRef}
           polylines={mapContext.polylines}
           polygonOutlines={mapContext.polygonOutlines}
           features={mapContext.features}
+          segments={mapContext.segments}
+          previewFeatures={mapContext.previewFeatures}
           centerPosition={mapContext.centerPosition}
           zoomLevel={mapContext.zoomLevel}
           interactionState={mapContext.interactionState}
           showUserLocation={mapContext.showUserLocation}
           onFeaturePress={mapContext.onFeaturePress}
-          userPosition={userPosition}
+          onSegmentPress={mapContext.onSegmentPress}
+          onMapTap={mapContext.onMapTap}
+          onMapLongPress={mapContext.onMapLongPress}
+          onRatingSubmit={mapContext.onRatingSubmit}
+          onRegionDidChange={mapContext.onRegionDidChange}
+          userPosition={mapContext.userPosition ?? userPosition}
         />
       </View>
 

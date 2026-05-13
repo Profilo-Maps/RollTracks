@@ -250,8 +250,8 @@ export interface IDataService {
   /** Check if local assets need updating (returns last modified timestamp from Supabase) */
   checkAssetUpdates(assetName: 'ProximityNetwork'): Promise<string | null>;
 
-  /** Download proximity network parquet as ArrayBuffer */
-  downloadProximityAsset(): Promise<ArrayBuffer>;
+  /** Return the public URL of the proximity network parquet for streaming download */
+  getProximityAssetUrl(): string;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -429,13 +429,10 @@ function _getDeviceInfo(): {
 // --- Session ---
 
 async function _createAnonymousSession(captchaToken?: string): Promise<Session> {
-  // Skip captcha verification for test tokens or if no token provided
-  const isTestToken = !captchaToken || 
-                      captchaToken === 'dev-bypass-token' || 
-                      captchaToken === 'test-key-always-passes-token';
-  
+  const shouldSkipCaptcha = __DEV__ || !captchaToken;
+
   const { data, error } = await supabase.auth.signInAnonymously({
-    options: isTestToken ? {} : {
+    options: shouldSkipCaptcha ? {} : {
       captchaToken,
     },
   });
@@ -570,6 +567,45 @@ async function _getRecoveryCredentials(
   return { id: result.recovery_id, passwordHash: result.password_hash };
 }
 
+interface VerifyLoginResponse {
+  success: boolean;
+  recovery_id?: string;
+  linked_user_id?: string;
+  error?: string;
+  remaining_attempts?: number;
+  captcha_required?: boolean;
+  is_locked?: boolean;
+}
+
+async function _verifyLoginViaEdgeFunction(
+  username: string,
+  password: string,
+  captchaToken?: string,
+): Promise<VerifyLoginResponse> {
+  const response = await fetch(
+    `${supabaseUrl}/functions/v1/verify-login`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': supabaseAnonKey,
+        'Authorization': `Bearer ${supabaseAnonKey}`,
+      },
+      body: JSON.stringify({
+        username,
+        password,
+        captcha_token: captchaToken,
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error('Login service unavailable.');
+  }
+
+  return response.json();
+}
+
 // --- user_recovery_links ---
 
 async function _linkRecoveryToUser(
@@ -602,71 +638,6 @@ async function _updateRecoveryLink(
     .eq('recovery_id', recoveryId);
   if (error)
     throw new Error(`Failed to update recovery link: ${error.message}`);
-}
-
-// --- Data migration ---
-
-async function _migrateUserData(
-  fromUserId: string,
-  toUserId: string,
-): Promise<void> {
-  // Migrate trips
-  const { data: trips, error: tripsErr } = await supabase
-    .from('trips')
-    .select('*')
-    .eq('user_id', fromUserId);
-  if (tripsErr)
-    throw new Error(`Failed to read trips for migration: ${tripsErr.message}`);
-
-  if (trips && trips.length > 0) {
-    const migrated = trips.map(({ trip_id: _id, ...rest }) => ({
-      ...rest,
-      user_id: toUserId,
-    }));
-    const { error } = await supabase.from('trips').insert(migrated);
-    if (error) throw new Error(`Failed to migrate trips: ${error.message}`);
-  }
-
-  // Migrate rated features
-  const { data: ratings, error: ratingsErr } = await supabase
-    .from('rated_features')
-    .select('*')
-    .eq('user_id', fromUserId);
-  if (ratingsErr)
-    throw new Error(
-      `Failed to read ratings for migration: ${ratingsErr.message}`,
-    );
-
-  if (ratings && ratings.length > 0) {
-    const migrated = ratings.map(({ id: _id, ...rest }) => ({
-      ...rest,
-      user_id: toUserId,
-    }));
-    const { error } = await supabase.from('rated_features').insert(migrated);
-    if (error) throw new Error(`Failed to migrate ratings: ${error.message}`);
-  }
-
-  // Migrate corrected segments
-  const { data: corrections, error: correctionsErr } = await supabase
-    .from('corrected_segments')
-    .select('*')
-    .eq('user_id', fromUserId);
-  if (correctionsErr)
-    throw new Error(
-      `Failed to read corrections for migration: ${correctionsErr.message}`,
-    );
-
-  if (corrections && corrections.length > 0) {
-    const migrated = corrections.map(({ id: _id, ...rest }) => ({
-      ...rest,
-      user_id: toUserId,
-    }));
-    const { error } = await supabase
-      .from('corrected_segments')
-      .insert(migrated);
-    if (error)
-      throw new Error(`Failed to migrate corrections: ${error.message}`);
-  }
 }
 
 // --- Cleanup ---
@@ -1554,41 +1525,12 @@ function _parsePointCoord(coord: any): [number, number] {
   return [0, 0];
 }
 
-/**
- * Download proximity network parquet as raw ArrayBuffer.
- * The parquet is stored in the 'dataranger-assets' bucket.
- */
-async function _downloadProximityAsset(): Promise<ArrayBuffer> {
+function _getProximityAssetUrl(): string {
   const fileName = 'San_Francisco_County_California_USA_network.parquet';
-
-  const { data, error } = await supabase.storage
+  const { data: { publicUrl } } = supabase.storage
     .from('dataranger-assets')
-    .download(fileName);
-
-  if (error) {
-    throw new Error(`Failed to download proximity parquet: ${error.message}`);
-  }
-
-  if (!data) {
-    throw new Error('No data returned for proximity parquet');
-  }
-
-  // Convert Blob to ArrayBuffer
-  let buffer: ArrayBuffer;
-  if (typeof data.arrayBuffer === 'function') {
-    buffer = await data.arrayBuffer();
-  } else {
-    // React Native fallback
-    buffer = await new Promise<ArrayBuffer>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as ArrayBuffer);
-      reader.onerror = reject;
-      reader.readAsArrayBuffer(data);
-    });
-  }
-
-  console.log(`[DatabaseAdapter] Downloaded proximity parquet: ${(buffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
-  return buffer;
+    .getPublicUrl(fileName);
+  return publicUrl;
 }
 
 // --- asset_metadata (optional table for tracking asset versions) ---
@@ -1698,41 +1640,46 @@ export const AuthService: IAuthService = {
 
   async login(username, password, captchaToken) {
     console.log('[login] Starting login for username:', username);
-    
-    // 1. Look up recovery credentials by username
-    const recovery = await _getRecoveryCredentials(username);
-    if (!recovery) {
-      console.log('[login] No recovery credentials found');
-      throw new Error('Username not found.');
-    }
-    console.log('[login] Found recovery credentials, recovery_id:', recovery.id);
 
-    // 2. Verify password using Argon2 comparison
-    const isValid = await _verifyPassword(password, recovery.passwordHash);
-    if (!isValid) {
-      console.log('[login] Password verification failed');
-      throw new Error('Incorrect password.');
-    }
-    console.log('[login] Password verified successfully');
+    // 1. Verify credentials via Edge Function (server-side Argon2 verification)
+    const result = await _verifyLoginViaEdgeFunction(username, password, captchaToken);
 
-    // 3. Get the user ID linked to these credentials
-    const linkedUserId = await _getLinkedUserId(recovery.id);
+    if (result.is_locked) {
+      throw new Error('Account locked due to too many failed attempts.');
+    }
+
+    if (result.captcha_required && !result.success) {
+      const err = new Error(result.error ?? 'Verification required.');
+      (err as any).captchaRequired = true;
+      (err as any).remainingAttempts = result.remaining_attempts ?? 0;
+      throw err;
+    }
+
+    if (!result.success || !result.recovery_id) {
+      const err = new Error(result.error ?? 'Invalid credentials.');
+      (err as any).remainingAttempts = result.remaining_attempts ?? 0;
+      (err as any).captchaRequired = result.captcha_required ?? false;
+      throw err;
+    }
+
+    console.log('[login] Credentials verified, recovery_id:', result.recovery_id);
+
+    // 2. Get the user ID linked to these credentials (returned by Edge Function, bypasses RLS)
+    const linkedUserId = result.linked_user_id;
     if (!linkedUserId) {
-      console.log('[login] No user_recovery_link found for recovery_id:', recovery.id);
+      console.log('[login] No linked user_id returned from Edge Function');
       throw new Error('No account linked to this username.');
     }
     console.log('[login] Found linked user_id:', linkedUserId);
 
-    // 4. Check if we have an existing session (same device scenario)
+    // 3. Check if we have an existing session (same device scenario)
     const existingSession = await _getSession();
-    
+
     if (existingSession) {
       console.log('[login] Existing session found, session user_id:', existingSession.user.id);
-      
-      // Check if this session belongs to the user trying to log in
+
       if (existingSession.user.id === linkedUserId) {
         console.log('[login] Same device re-login - session matches user');
-        
         const profile = await _getUserProfile(linkedUserId);
         if (!profile) {
           throw new Error('Profile not found for existing session.');
@@ -1740,60 +1687,35 @@ export const AuthService: IAuthService = {
         return profile;
       } else {
         console.log('[login] Different user logging in - need to switch sessions');
-        // Different user on same device - sign out current session first
         await supabase.auth.signOut();
       }
     }
 
-    // 5. No matching session - need to create new one and migrate data
-    console.log('[login] No matching session - performing multi-device recovery');
-    
-    // Get the existing profile data
-    const existingProfile = await _getUserProfile(linkedUserId);
-    if (!existingProfile) {
-      console.log('[login] ERROR: Profile not found for user_id:', linkedUserId);
-      throw new Error('Account data not found. Please contact support.');
-    }
-    console.log('[login] Found existing profile for:', existingProfile.displayName);
-
-    // Create new anonymous session (generates new UUID)
+    // 4. Multi-device recovery - create new session and migrate atomically
+    console.log('[login] Performing multi-device recovery');
     const session = await _createAnonymousSession(captchaToken);
     const newUserId = session.user.id;
     console.log('[login] Created new session with user_id:', newUserId);
 
-    // Migrate all data from old user to new user
-    console.log('[login] Migrating data from', linkedUserId, 'to', newUserId);
-    await _migrateUserData(linkedUserId, newUserId);
+    // Migrate all data atomically via server-side function
+    const { error: migrateError } = await supabase.rpc('migrate_user_to_new_session', {
+      p_old_user_id: linkedUserId,
+      p_recovery_id: result.recovery_id,
+    });
+    if (migrateError) {
+      console.error('[login] Migration failed:', migrateError.message);
+      throw new Error('Account migration failed. Please try again.');
+    }
+    console.log('[login] Data migrated successfully');
 
-    // Create new profile with same data
-    await _insertUserProfile(
-      newUserId,
-      {
-        displayName: existingProfile.displayName,
-        age: existingProfile.age,
-        modeList: existingProfile.modeList,
-        dataRangerMode: existingProfile.dataRangerMode,
-      },
-      true, // Skip display name check since we're migrating existing profile
-    );
-    console.log('[login] Created new profile');
-
-    // Update recovery link to point to new user
-    await _updateRecoveryLink(recovery.id, newUserId);
-    console.log('[login] Updated recovery link');
-
-    // Delete old profile (cleanup)
-    await _deleteUserProfile(linkedUserId);
-    console.log('[login] Deleted old profile');
+    // 5. Load the migrated profile
+    const profile = await _getUserProfile(newUserId);
+    if (!profile) {
+      throw new Error('Profile not found after migration.');
+    }
 
     console.log('[login] Multi-device recovery completed successfully');
-    return {
-      id: newUserId,
-      displayName: existingProfile.displayName,
-      age: existingProfile.age,
-      modeList: existingProfile.modeList,
-      dataRangerMode: existingProfile.dataRangerMode,
-    };
+    return profile;
   },
 
   async getCurrentUser() {
@@ -1982,8 +1904,8 @@ export const DataService: IDataService = {
     return _getAssetMetadata(assetName);
   },
 
-  async downloadProximityAsset() {
-    return _downloadProximityAsset();
+  getProximityAssetUrl() {
+    return _getProximityAssetUrl();
   },
 
   // --- Geometry Edit Operations ---

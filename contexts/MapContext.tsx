@@ -13,8 +13,10 @@
  * The MapViewComponent subscribes to this context and updates accordingly.
  */
 
-import { Feature, InteractionState, PolygonOutline, Polyline } from '@/components/MapViewComponent';
-import React, { createContext, ReactNode, useCallback, useContext, useState } from 'react';
+import { Feature, InteractionState, PolygonOutline, Polyline, RatingSubmitParams } from '@/components/MapViewComponent';
+import type { NetworkSegment, FacilityType } from '@/services/types/NetworkSegment';
+import type { RnMapboxAdapterInstance } from '@/services/rnMapboxAdapter';
+import React, { createContext, ReactNode, useCallback, useContext, useState, useRef } from 'react';
 
 interface MapState {
   polylines: Polyline[];
@@ -25,6 +27,14 @@ interface MapState {
   interactionState: InteractionState;
   showUserLocation: boolean;
   onFeaturePress?: (feature: Feature) => void;
+  segments: NetworkSegment[];
+  previewFeatures: GeoJSON.Feature[];
+  userPosition: [number, number] | null;
+  onSegmentPress?: (segment: NetworkSegment, facilityType: FacilityType) => void;
+  onMapTap?: (coords: { longitude: number; latitude: number }) => void;
+  onMapLongPress?: (coords: { longitude: number; latitude: number }) => void;
+  onRatingSubmit?: (params: RatingSubmitParams) => Promise<void>;
+  onRegionDidChange?: (bbox: { minLon: number; minLat: number; maxLon: number; maxLat: number }) => void;
 }
 
 interface MapContextValue extends MapState {
@@ -32,6 +42,8 @@ interface MapContextValue extends MapState {
   resetMapState: () => void;
   recenterToUser: () => void;
   recenterTrigger: number;
+  getMapAdapter: () => RnMapboxAdapterInstance | null;
+  registerMapAdapterGetter: (fn: () => RnMapboxAdapterInstance | null) => void;
 }
 
 const MapContext = createContext<MapContextValue | undefined>(undefined);
@@ -45,11 +57,20 @@ const DEFAULT_MAP_STATE: MapState = {
   interactionState: 'interactive',
   showUserLocation: true,
   onFeaturePress: undefined,
+  segments: [],
+  previewFeatures: [],
+  userPosition: null,
+  onSegmentPress: undefined,
+  onMapTap: undefined,
+  onMapLongPress: undefined,
+  onRatingSubmit: undefined,
+  onRegionDidChange: undefined,
 };
 
 export function MapProvider({ children }: { children: ReactNode }) {
   const [mapState, setMapState] = useState<MapState>(DEFAULT_MAP_STATE);
   const [recenterTrigger, setRecenterTrigger] = useState(0);
+  const mapAdapterGetterRef = useRef<() => RnMapboxAdapterInstance | null>(() => null);
 
   const updateMapState = useCallback((updates: Partial<MapState>) => {
     setMapState((prev) => ({ ...prev, ...updates }));
@@ -65,12 +86,22 @@ export function MapProvider({ children }: { children: ReactNode }) {
     setRecenterTrigger((prev) => prev + 1);
   }, []);
 
+  const getMapAdapter = useCallback((): RnMapboxAdapterInstance | null => {
+    return mapAdapterGetterRef.current();
+  }, []);
+
+  const registerMapAdapterGetter = useCallback((fn: () => RnMapboxAdapterInstance | null) => {
+    mapAdapterGetterRef.current = fn;
+  }, []);
+
   const value: MapContextValue = {
     ...mapState,
     updateMapState,
     resetMapState,
     recenterToUser,
     recenterTrigger,
+    getMapAdapter,
+    registerMapAdapterGetter,
   };
 
   return <MapContext.Provider value={value}>{children}</MapContext.Provider>;

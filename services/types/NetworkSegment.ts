@@ -183,7 +183,10 @@ export type GeometryEditType =
   | 'split_segment'
   | 'merge_segments'
   | 'draw_crosswalk'
-  | 'draw_segment';
+  | 'draw_segment'
+  | 'delete_point'
+  | 'delete_hull'
+  | 'edit_hull';
 
 export interface MoveEndpointPayload {
   nodeId: number;

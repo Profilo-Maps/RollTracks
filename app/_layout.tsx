@@ -1,4 +1,5 @@
 import { DarkTheme, DefaultTheme, ThemeProvider as NavigationThemeProvider } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -9,7 +10,6 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { NativeAdapter } from '@/adapters/NativeAdapter';
 import { LoadingScreen } from '@/components/LoadingScreen';
 import { NetworkErrorScreen } from '@/components/NetworkErrorScreen';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
@@ -57,6 +57,7 @@ try {
  */
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
+    ...Ionicons.font,
     Inter_400Regular,
     Inter_500Medium,
     Inter_600SemiBold,
@@ -102,29 +103,6 @@ function RootNavigator() {
   useEffect(() => {
     console.log('[RootNavigator] State:', { isLoading, isAuthenticated, hasNetworkError });
   }, [isLoading, isAuthenticated, hasNetworkError]);
-
-  // Request GPS permissions when app loads and user is authenticated
-  useEffect(() => {
-    const requestGPSPermissions = async () => {
-      // Only request permissions if user is authenticated
-      // This prevents permission prompts on the login screen
-      if (!isAuthenticated) {
-        return;
-      }
-
-      try {
-        console.log('[RootLayout] Requesting GPS permissions...');
-        await NativeAdapter.requestPermissions();
-        console.log('[RootLayout] GPS permissions granted');
-      } catch (error) {
-        console.warn('[RootLayout] GPS permissions denied or unavailable:', error);
-        // Don't throw error - user can still use the app
-        // They'll be prompted again when trying to start a trip
-      }
-    };
-
-    requestGPSPermissions();
-  }, [isAuthenticated]);
 
   // Hide native splash screen once loading is complete
   useEffect(() => {

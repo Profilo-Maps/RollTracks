@@ -45,11 +45,15 @@ class DataRangerServiceClass {
 
   // Storage paths
   private readonly PARQUET_FILE_NAME = 'proximity_network.parquet';
+  private readonly GRID_INDEX_FILE_NAME = 'proximity_grid_index.json';
   private readonly PROXIMITY_VERSION_KEY = '@proximity/version';
   private readonly PENDING_GEOMETRY_EDITS_KEY = '@dataranger/pendingGeometryEdits';
 
+  // Chunked read batch size — keeps per-call allocation under ~4 MB
+  private readonly INDEX_BUILD_BATCH_SIZE = 2000;
+
   // Parquet state (lazy loading)
-  private parquetBuffer: ArrayBuffer | null = null;
+  private parquetFile: InstanceType<typeof File> | null = null;
   private gridOrigin: { x: number; y: number; cellSize: number } | null = null;
   private gridCellIndex: Map<string, Set<number>> | null = null; // "col_row" → row group indices
   private loadedCells: Map<string, NetworkSegment[]> = new Map();
@@ -58,6 +62,9 @@ class DataRangerServiceClass {
   private segmentIndex: SegmentSpatialGrid | null = null;
   private segmentMap: Map<string, NetworkSegment> = new Map();
   private isInitialized: boolean = false;
+  // Deduplicates concurrent initialize() calls — both callers join the same promise
+  // instead of each allocating a 124MB ArrayBuffer, which would cause Android OOM.
+  private initializingPromise: Promise<void> | null = null;
 
   // Track ratings for current trip: cris_id → userRating
   private ratedFeatures: Map<string, number> = new Map();
@@ -88,40 +95,55 @@ class DataRangerServiceClass {
       return;
     }
 
+    // If another caller already started initialization, join that promise instead of
+    // starting a second one. A duplicate 124 MB ArrayBuffer allocation causes Android OOM.
+    if (this.initializingPromise) {
+      return this.initializingPromise;
+    }
+
+    this.initializingPromise = this._doInitializeProximity(checkForUpdates).finally(() => {
+      this.initializingPromise = null;
+    });
+    return this.initializingPromise;
+  }
+
+  private async _doInitializeProximity(checkForUpdates: boolean): Promise<void> {
     try {
       console.log('[DataRangerService] Initializing (metadata only)...');
 
-      // Get parquet buffer (from cache or download)
-      const buffer = await this.getParquetBuffer();
-      this.parquetBuffer = buffer;
+      // Ensure parquet file exists on disk (download if needed)
+      this.parquetFile = await this.ensureParquetFile();
+      console.log('[DataRangerService] Parquet file ready, reading metadata...');
 
-      // Read metadata to get grid origin
+      // Read metadata to get grid origin (reads only the footer from disk)
       const { parquetMetadataAsync } = await import('hyparquet/src/index.js');
-      const asyncBuffer = this.wrapBuffer(buffer);
+      const asyncBuffer = this.createFileAsyncBuffer();
       const metadata = await parquetMetadataAsync(asyncBuffer);
 
       // Extract grid origin from key-value metadata
-      // hyparquet may return values as Uint8Array (raw parquet bytes) or string
       const originKv = metadata.key_value_metadata?.find(
-        (kv: { key: string | Uint8Array; value: string | Uint8Array }) => {
-          const k = kv.key instanceof Uint8Array ? new TextDecoder().decode(kv.key) : kv.key;
-          return k === 'proximity_grid_origin';
-        }
+        (kv: { key: unknown }) => String(kv.key ?? '') === 'proximity_grid_origin'
       );
       if (originKv) {
-        const raw = originKv.value;
-        const jsonStr = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw as string;
+        const raw = originKv.value as string | Uint8Array | undefined;
+        const jsonStr = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : (raw ?? '');
         this.gridOrigin = JSON.parse(jsonStr);
         console.log('[DataRangerService] Grid origin:', this.gridOrigin);
       } else {
-        console.warn('[DataRangerService] No grid origin in parquet metadata, falling back to full load');
-        console.log('[DataRangerService] Available keys:', metadata.key_value_metadata?.map((kv: { key: unknown }) => kv.key));
-        await this.fullLoadFallback(buffer);
-        return;
+        throw new Error('Parquet missing proximity_grid_origin metadata — re-run the pipeline and re-upload.');
       }
 
-      // Build grid cell index (fast — single column read)
-      await this.buildGridCellIndex(buffer);
+      // Try loading cached grid cell index from disk first
+      const cachedIndex = await this.loadGridCellIndexFromDisk();
+      if (cachedIndex) {
+        this.gridCellIndex = cachedIndex;
+        console.log(`[DataRangerService] Loaded cached grid index: ${cachedIndex.size} cells`);
+      } else {
+        // Build from parquet in small batches to avoid large single allocations
+        await this.buildGridCellIndex();
+        // Persist to disk so subsequent launches skip the expensive build
+        await this.saveGridCellIndexToDisk();
+      }
 
       this.isInitialized = true;
       console.log(`[DataRangerService] Initialized: ${this.gridCellIndex?.size ?? 0} grid cells indexed`);
@@ -132,42 +154,141 @@ class DataRangerServiceClass {
         );
       }
     } catch (error) {
-      console.warn('[DataRangerService] Initialization failed:', error);
+      const msg =
+        error instanceof Error
+          ? error.message
+          : typeof error === 'object' && error !== null
+            ? JSON.stringify(error) || '[empty native error]'
+            : String(error);
+      console.warn('[DataRangerService] Initialization failed:', msg);
+      throw new Error(`DataRanger init failed: ${msg}`);
     }
   }
 
-  private wrapBuffer(buffer: ArrayBuffer) {
+  /**
+   * Create an AsyncBuffer backed by on-disk file reads via FileHandle.
+   * Reads only the requested byte ranges — never loads the full parquet into JS heap.
+   */
+  private createFileAsyncBuffer() {
+    const file = this.parquetFile!;
+    const handle = file.open();
+    const fileSize = handle.size!;
+    handle.close();
+    console.log(`[DataRangerService] File-backed AsyncBuffer: ${(fileSize / 1024 / 1024).toFixed(1)} MB`);
+
     return {
-      byteLength: buffer.byteLength,
+      byteLength: fileSize,
       slice(start: number, end?: number): Promise<ArrayBuffer> {
-        return Promise.resolve(buffer.slice(start, end));
+        const len = (end ?? fileSize) - start;
+        console.log(`[AsyncBuffer.slice] offset=${start} len=${len} (${(len / 1024 / 1024).toFixed(2)} MB)`);
+        const h = file.open();
+        h.offset = start;
+        const bytes = h.readBytes(len);
+        h.close();
+        return Promise.resolve(bytes.buffer);
       },
     };
   }
 
-  private async getParquetBuffer(): Promise<ArrayBuffer> {
-    // Check filesystem cache
+  /**
+   * Ensure the parquet file exists on disk and is valid.
+   * Downloads from Supabase on first run; subsequent launches use the cached file.
+   * Returns a File handle — the file is NEVER loaded entirely into JS heap.
+   */
+  private async ensureParquetFile(): Promise<InstanceType<typeof File>> {
     const file = new File(Paths.document, this.PARQUET_FILE_NAME);
     if (file.exists) {
-      console.log('[DataRangerService] Loading parquet from filesystem cache');
-      return file.arrayBuffer();
+      console.log('[DataRangerService] Parquet file found in cache, validating...');
+      if (this.isParquetValid(file)) {
+        return file;
+      }
+      console.warn('[DataRangerService] Cached parquet invalid or truncated, re-downloading');
+      try { file.delete(); this.deleteGridIndexCache(); } catch { /* ignore */ }
     }
 
-    // Download from Supabase
-    console.log('[DataRangerService] Downloading parquet...');
-    const buffer = await DataService.downloadProximityAsset();
-
-    // Cache to filesystem
-    const bytes = new Uint8Array(buffer);
-    file.write(bytes);
-    await AsyncStorage.setItem(this.PROXIMITY_VERSION_KEY, new Date().toISOString());
-
-    return buffer;
+    return this.downloadParquet(file);
   }
 
-  private async buildGridCellIndex(buffer: ArrayBuffer): Promise<void> {
+  private isParquetValid(file: InstanceType<typeof File>): boolean {
+    try {
+      const handle = file.open();
+      try {
+        const fileSize = handle.size ?? 0;
+        console.log(`[DataRangerService] Cached file size: ${(fileSize / 1024 / 1024).toFixed(1)} MB`);
+
+        // Minimum viable parquet is several MB for this dataset.
+        // A partial download will be much smaller than the real file.
+        if (fileSize < 5 * 1024 * 1024) {
+          console.warn('[DataRangerService] File too small, likely truncated download');
+          return false;
+        }
+
+        // Check PAR1 magic at header (bytes 0-3)
+        const header = handle.readBytes(4);
+        const headerOk = header[0] === 0x50 && header[1] === 0x41 && header[2] === 0x52 && header[3] === 0x31;
+
+        // Check PAR1 magic at footer (last 4 bytes) — truncated downloads fail here
+        handle.offset = fileSize - 4;
+        const footer = handle.readBytes(4);
+        const footerOk = footer[0] === 0x50 && footer[1] === 0x41 && footer[2] === 0x52 && footer[3] === 0x31;
+
+        console.log(`[DataRangerService] PAR1 header=${headerOk} footer=${footerOk}`);
+        return headerOk && footerOk;
+      } finally {
+        handle.close();
+      }
+    } catch (err) {
+      console.warn('[DataRangerService] Parquet validation error:', err);
+      return false;
+    }
+  }
+
+  private async downloadParquet(file: InstanceType<typeof File>): Promise<InstanceType<typeof File>> {
+    const url = DataService.getProximityAssetUrl();
+    console.log('[DataRangerService] Downloading parquet (chunked):', url);
+
+    // Resolve total size upfront so we can issue Range requests.
+    const head = await fetch(url, { method: 'HEAD' });
+    const totalSize = parseInt(head.headers.get('content-length') ?? '0', 10);
+    if (!totalSize) throw new Error('Server did not return Content-Length for parquet');
+    console.log(`[DataRangerService] Parquet size: ${(totalSize / 1024 / 1024).toFixed(1)} MB`);
+
+    // Chunked Range download — each fetch allocates only CHUNK bytes in the
+    // JS heap. After writeBytes the Uint8Array is unreferenced and Hermes can
+    // GC it before the next chunk arrives, keeping peak heap well under 10 MB.
+    const CHUNK = 4 * 1024 * 1024; // 4 MB per request
+    file.write(new Uint8Array(0)); // create/truncate destination
+    const handle = file.open();
+    let written = 0;
+    try {
+      while (written < totalSize) {
+        const end = Math.min(written + CHUNK - 1, totalSize - 1);
+        const resp = await fetch(url, { headers: { Range: `bytes=${written}-${end}` } });
+        if (resp.status !== 206 && resp.status !== 200) {
+          throw new Error(`HTTP ${resp.status} on range ${written}-${end}`);
+        }
+        const chunk = new Uint8Array(await resp.arrayBuffer());
+        handle.writeBytes(chunk);
+        written += chunk.byteLength;
+        console.log(`[DataRangerService] ${(written / 1024 / 1024).toFixed(1)}/${(totalSize / 1024 / 1024).toFixed(1)} MB`);
+      }
+    } finally {
+      handle.close();
+    }
+
+    if (!this.isParquetValid(file)) {
+      try { file.delete(); this.deleteGridIndexCache(); } catch { /* ignore */ }
+      throw new Error('Parquet download incomplete or corrupt — please retry');
+    }
+
+    await AsyncStorage.setItem(this.PROXIMITY_VERSION_KEY, new Date().toISOString());
+    console.log(`[DataRangerService] Parquet cached: ${(file.size / 1024 / 1024).toFixed(1)} MB`);
+    return file;
+  }
+
+  private async buildGridCellIndex(): Promise<void> {
     const { parquetMetadataAsync, parquetRead } = await import('hyparquet/src/index.js');
-    const asyncBuffer = this.wrapBuffer(buffer);
+    const asyncBuffer = this.createFileAsyncBuffer();
     const metadata = await parquetMetadataAsync(asyncBuffer);
     const rowGroups = metadata.row_groups ?? [];
 
@@ -177,32 +298,38 @@ class DataRangerServiceClass {
     let globalRowOffset = 0;
     for (let rgIdx = 0; rgIdx < rowGroups.length; rgIdx++) {
       const groupRows = Number(rowGroups[rgIdx].num_rows);
-      const rowStart = globalRowOffset;
-      const rowEnd = globalRowOffset + groupRows;
-      globalRowOffset = rowEnd;
+      const rgStart = globalRowOffset;
+      globalRowOffset += groupRows;
 
       const cellsInGroup = new Set<string>();
 
-      await new Promise<void>((resolve, reject) => {
-        parquetRead({
-          file: asyncBuffer,
-          metadata,
-          columns: ['street_grid_id'],
-          rowStart,
-          rowEnd,
-          onChunk: (chunk: any) => {
-            // onChunk delivers one ColumnData per page: chunk.columnData is a DecodedArray
-            const data: unknown[] = chunk.columnData ?? [];
-            for (const v of data) {
-              if (typeof v !== 'string') continue;
-              const parts = v.split('_');
-              if (parts.length >= 2) {
-                cellsInGroup.add(`${parts[0]}_${parts[1]}`);
+      // Read street_grid_id in small batches to keep peak allocation low.
+      // Parquet column chunks are stored per row group, but requesting a
+      // smaller rowStart/rowEnd range lets hyparquet decompress only the
+      // pages that overlap the range, avoiding a single 100 MB+ allocation.
+      for (let batchStart = rgStart; batchStart < rgStart + groupRows; batchStart += this.INDEX_BUILD_BATCH_SIZE) {
+        const batchEnd = Math.min(batchStart + this.INDEX_BUILD_BATCH_SIZE, rgStart + groupRows);
+
+        await new Promise<void>((resolve, reject) => {
+          parquetRead({
+            file: asyncBuffer,
+            metadata,
+            columns: ['street_grid_id'],
+            rowStart: batchStart,
+            rowEnd: batchEnd,
+            onChunk: (chunk: any) => {
+              const data: unknown[] = chunk.columnData ?? [];
+              for (const v of data) {
+                if (typeof v !== 'string') continue;
+                const parts = v.split('_');
+                if (parts.length >= 2) {
+                  cellsInGroup.add(`${parts[0]}_${parts[1]}`);
+                }
               }
-            }
-          },
-        }).then(resolve).catch(reject);
-      });
+            },
+          }).then(resolve).catch(reject);
+        });
+      }
 
       for (const cellKey of cellsInGroup) {
         const existing = this.gridCellIndex.get(cellKey);
@@ -214,28 +341,64 @@ class DataRangerServiceClass {
       }
     }
 
-    console.log(`[DataRangerService] Grid cell index: ${this.gridCellIndex.size} cells across ${rowGroups.length} row groups`);
+    console.log(`[DataRangerService] Grid cell index built: ${this.gridCellIndex.size} cells across ${rowGroups.length} row groups`);
   }
 
   /**
-   * Fallback: load all segments if parquet lacks grid origin metadata.
-   * This preserves backward compatibility with older parquet files.
+   * Save the grid cell index to a JSON file on disk so subsequent launches
+   * can skip the expensive parquet column scan.
    */
-  private async fullLoadFallback(buffer: ArrayBuffer): Promise<void> {
-    const { parquetReadObjects } = await import('hyparquet/src/index.js');
-    const asyncBuffer = this.wrapBuffer(buffer);
-    const columns = getAllColumns();
-
-    const rows = await parquetReadObjects({ file: asyncBuffer, columns });
-    const segments: NetworkSegment[] = [];
-    for (const row of rows) {
-      const segment = rowToNetworkSegment(row as Record<string, unknown>);
-      if (segment) segments.push(segment);
+  private async saveGridCellIndexToDisk(): Promise<void> {
+    if (!this.gridCellIndex) return;
+    try {
+      // Serialize Map<string, Set<number>> → Record<string, number[]>
+      const obj: Record<string, number[]> = {};
+      for (const [key, rgSet] of this.gridCellIndex) {
+        obj[key] = [...rgSet];
+      }
+      const file = new File(Paths.document, this.GRID_INDEX_FILE_NAME);
+      file.write(JSON.stringify(obj));
+      console.log(`[DataRangerService] Grid index cached to disk (${this.gridCellIndex.size} cells)`);
+    } catch (err) {
+      console.warn('[DataRangerService] Failed to cache grid index:', err);
     }
+  }
 
-    this.loadSegmentsIntoMemory(segments);
-    this.isInitialized = true;
-    console.log(`[DataRangerService] Full fallback load: ${segments.length} segments`);
+  /**
+   * Load the cached grid cell index from disk.
+   * Returns null if the cache file doesn't exist or is corrupt.
+   */
+  private async loadGridCellIndexFromDisk(): Promise<Map<string, Set<number>> | null> {
+    try {
+      const file = new File(Paths.document, this.GRID_INDEX_FILE_NAME);
+      if (!file.exists) return null;
+
+      const handle = file.open();
+      const bytes = handle.readBytes(handle.size!);
+      handle.close();
+
+      const text = new TextDecoder().decode(bytes);
+      const obj: Record<string, number[]> = JSON.parse(text);
+
+      const map = new Map<string, Set<number>>();
+      for (const [key, arr] of Object.entries(obj)) {
+        map.set(key, new Set(arr));
+      }
+      return map;
+    } catch (err) {
+      console.warn('[DataRangerService] Failed to load cached grid index:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Delete the cached grid cell index file from disk.
+   */
+  private deleteGridIndexCache(): void {
+    try {
+      const file = new File(Paths.document, this.GRID_INDEX_FILE_NAME);
+      if (file.exists) file.delete();
+    } catch { /* ignore */ }
   }
 
   /**
@@ -243,7 +406,7 @@ class DataRangerServiceClass {
    * Skips cells already loaded. Returns when all needed cells are ready.
    */
   async loadGridCellsForBbox(bbox: { minLon: number; minLat: number; maxLon: number; maxLat: number }): Promise<void> {
-    if (!this.gridOrigin || !this.gridCellIndex || !this.parquetBuffer) return;
+    if (!this.gridOrigin || !this.gridCellIndex || !this.parquetFile) return;
 
     const range = bboxToGridCells(bbox, { x: this.gridOrigin.x, y: this.gridOrigin.y }, this.gridOrigin.cellSize);
 
@@ -269,7 +432,7 @@ class DataRangerServiceClass {
 
     try {
       const { parquetMetadataAsync, parquetReadObjects } = await import('hyparquet/src/index.js');
-      const asyncBuffer = this.wrapBuffer(this.parquetBuffer);
+      const asyncBuffer = this.createFileAsyncBuffer();
       const columns = getAllColumns();
       const neededCellSet = new Set(cellsToLoad);
 
@@ -374,12 +537,13 @@ class DataRangerServiceClass {
       const localVersion = await AsyncStorage.getItem(this.PROXIMITY_VERSION_KEY);
       if (!localVersion || new Date(serverVersion) > new Date(localVersion)) {
         console.log('[DataRangerService] Proximity update available, re-downloading...');
-        // Clear cached file and re-initialize
+        // Clear cached files and re-initialize
         const file = new File(Paths.document, this.PARQUET_FILE_NAME);
         if (file.exists) file.delete();
+        this.deleteGridIndexCache();
 
         // Reset state and re-initialize
-        this.parquetBuffer = null;
+        this.parquetFile = null;
         this.gridOrigin = null;
         this.gridCellIndex = null;
         this.loadedCells.clear();
@@ -878,19 +1042,26 @@ class DataRangerServiceClass {
       editedAttributes?: Record<string, unknown>;
       rating?: number;
       coord: [number, number];
+      featureType: 'point' | 'line';
     },
     tripId: string,
     userId: string,
   ): Promise<void> {
+    const editTypeMap = {
+      rate: 'rating',
+      correct_attributes: 'attribute_correction',
+      correct_geometry: 'geometry_correction',
+    } as const;
     const featureEdit = {
       userId,
       tripId,
-      editType: edit.editType,
+      editType: editTypeMap[edit.editType],
       streetGridId: edit.streetGridId,
       geometry: edit.geometry,
       editedAttributes: edit.editedAttributes || null,
       rating: edit.rating ?? null,
       coord: edit.coord,
+      featureType: edit.featureType,
     };
 
     await DataService.writeFeatureEdit(featureEdit);
@@ -971,6 +1142,7 @@ class DataRangerServiceClass {
       streetGridId,
       geometry: recordedPolyline,
       coord,
+      featureType: 'line',
     }, tripId, userId);
   }
 
@@ -1071,9 +1243,8 @@ class DataRangerServiceClass {
   async clearCache(): Promise<void> {
     try {
       const file = new File(Paths.document, this.PARQUET_FILE_NAME);
-      if (file.exists) {
-        file.delete();
-      }
+      if (file.exists) file.delete();
+      this.deleteGridIndexCache();
       await AsyncStorage.removeItem(this.PROXIMITY_VERSION_KEY);
       console.log('[DataRangerService] Cache cleared');
     } catch (error) {
@@ -1092,7 +1263,7 @@ class DataRangerServiceClass {
     this.segmentMap.clear();
     this.loadedCells.clear();
     this.loadingCells.clear();
-    this.parquetBuffer = null;
+    this.parquetFile = null;
     this.gridOrigin = null;
     this.gridCellIndex = null;
     this.isInitialized = false;

@@ -49,12 +49,16 @@ export function DataRangerProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Defer parquet initialization until after the map and any entrance
-    // animations have fully rendered, so the basemap appears immediately.
+    // Defer parquet initialization until after the map and entrance animations
+    // have fully settled. InteractionManager alone isn't enough — if no
+    // animations are registered it fires immediately, racing with Mapbox GL
+    // surface allocation and causing OOM on memory-constrained devices.
+    // The 4 s grace period lets the GL surface finish before the 44 MB download starts.
     setIsInitializing(true);
     setError(null);
 
     taskRef.current = InteractionManager.runAfterInteractions(async () => {
+      await new Promise<void>(resolve => setTimeout(resolve, 4000));
       try {
         console.log('[DataRangerContext] Starting background parquet initialization...');
         await DataRangerService.initialize(true);

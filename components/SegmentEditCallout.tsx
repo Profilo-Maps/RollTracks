@@ -274,7 +274,7 @@ export function SegmentEditCallout({
             <View style={styles.headerLeft}>
               <ThemedText style={styles.headerTitle}>{mode === 'new' ? `New ${getFacilityLabel(facilityType)}` : `Edit ${getFacilityLabel(facilityType)}`}</ThemedText>
               <ThemedText style={[styles.headerSubtitle, { color: colors.icon }]}>
-                {streetName} ({segment.streetGridId})
+                {streetName}{segment ? ` (${segment.streetGridId})` : ''}
               </ThemedText>
             </View>
             <TouchableOpacity onPress={onClose} style={styles.closeButton}>

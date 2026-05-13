@@ -1,6 +1,5 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Link } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
     ActivityIndicator,
     KeyboardAvoidingView,
@@ -20,9 +19,6 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { errorNotification, mediumImpact } from '@/utils/haptics';
 
-const FAILED_LOGIN_KEY = 'failed_login_attempts';
-const FAILED_LOGIN_THRESHOLD = 3;
-
 export default function LoginScreen() {
   const { signIn } = useAuth();
   const { colorScheme } = useTheme();
@@ -40,42 +36,6 @@ export default function LoginScreen() {
   const iconColor = useThemeColor({}, 'icon');
   const errorColor = useThemeColor({}, 'error');
 
-  // Load failed login attempts on mount
-  useEffect(() => {
-    const loadFailedAttempts = async () => {
-      try {
-        const stored = await AsyncStorage.getItem(FAILED_LOGIN_KEY);
-        if (stored) {
-          const attempts = parseInt(stored, 10);
-          setFailedAttempts(attempts);
-          if (attempts >= FAILED_LOGIN_THRESHOLD) {
-            setShowCaptcha(true);
-          }
-        }
-      } catch (error) {
-        console.error('Failed to load login attempts:', error);
-      }
-    };
-    loadFailedAttempts();
-  }, []);
-
-  const incrementFailedAttempts = async () => {
-    const newAttempts = failedAttempts + 1;
-    setFailedAttempts(newAttempts);
-    await AsyncStorage.setItem(FAILED_LOGIN_KEY, newAttempts.toString());
-    
-    if (newAttempts >= FAILED_LOGIN_THRESHOLD) {
-      setShowCaptcha(true);
-    }
-  };
-
-  const resetFailedAttempts = async () => {
-    setFailedAttempts(0);
-    await AsyncStorage.removeItem(FAILED_LOGIN_KEY);
-    setShowCaptcha(false);
-    setCaptchaToken('');
-  };
-
   const handleLogin = async () => {
     setError('');
 
@@ -90,8 +50,8 @@ export default function LoginScreen() {
       return;
     }
 
-    // Require captcha if threshold reached
-    if (failedAttempts >= FAILED_LOGIN_THRESHOLD && !captchaToken) {
+    // Require captcha if server indicated it's needed
+    if (showCaptcha && !captchaToken) {
       errorNotification();
       setError('Please complete the captcha verification.');
       return;
@@ -100,15 +60,18 @@ export default function LoginScreen() {
     setIsLoading(true);
     try {
       await signIn(displayName.trim(), password, captchaToken);
-      // Success - reset failed attempts
-      await resetFailedAttempts();
+      // Success - server resets failed attempts automatically
       // Navigation will happen automatically via AuthContext state change
     } catch (e: any) {
-      // Failed login - increment counter
       errorNotification();
-      await incrementFailedAttempts();
       setError(e.message || 'Login failed. Please check your credentials.');
-      // Reset captcha token so user must complete it again
+      // Server-driven CAPTCHA and attempt tracking
+      if (e.remainingAttempts !== undefined) {
+        setFailedAttempts(10 - e.remainingAttempts);
+      }
+      if (e.captchaRequired) {
+        setShowCaptcha(true);
+      }
       setCaptchaToken('');
     } finally {
       setIsLoading(false);
@@ -168,7 +131,7 @@ export default function LoginScreen() {
                 editable={!isLoading}
               />
 
-              {/* Show captcha after 3 failed attempts */}
+              {/* Show captcha when server requires verification */}
               {showCaptcha && (
                 <>
                   <ThemedText style={styles.label}>Verification Required</ThemedText>
@@ -191,9 +154,9 @@ export default function LoginScreen() {
                 <ThemedText style={[styles.error, { color: errorColor }]}>{error}</ThemedText>
               ) : null}
 
-              {failedAttempts > 0 && failedAttempts < FAILED_LOGIN_THRESHOLD && (
+              {failedAttempts > 0 && !showCaptcha && (
                 <ThemedText style={styles.warningText}>
-                  {FAILED_LOGIN_THRESHOLD - failedAttempts} attempt{FAILED_LOGIN_THRESHOLD - failedAttempts !== 1 ? 's' : ''} remaining before verification required
+                  {10 - failedAttempts} attempt{10 - failedAttempts !== 1 ? 's' : ''} remaining before verification required
                 </ThemedText>
               )}
 
