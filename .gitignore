@@ -59,3 +59,19 @@ cache/
 specs/San_Francisco_County_California_USA_county_map.html
 /.claudeignore
 nul
+
+# Archived / local-only stale code
+/Old
+
+# IDE
+.idea/
+.kiro/
+
+# Local dev artifacts
+build-error.log
+reset-database.sql
+test_normalize_tag.py
+
+# Supabase CLI cache (contains project ref)
+supabase/.temp/
+supabase/supabase/
