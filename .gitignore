@@ -53,6 +53,9 @@ results/
 #Map Files
 /assets
 
+# Cache files (too large for GitHub)
+cache/
+
 specs/San_Francisco_County_California_USA_county_map.html
 /.claudeignore
 nul
