@@ -36,6 +36,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+    ActivityIndicator,
     Alert,
     Platform,
     StyleSheet,
@@ -54,6 +55,7 @@ export default function ActiveTripScreen() {
   const { user } = useAuth();
   const { isReady: isDataRangerReady } = useDataRanger();
   const toolPanelsRef = useRef<DataRangerToolPanelsRef>(null);
+  const hasInitializedRef = useRef(false);
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const errorColor = colors.error;
@@ -88,6 +90,12 @@ export default function ActiveTripScreen() {
   const [nearbyFeatures, setNearbyFeatures] = useState<Feature[]>([]);
   const [nearbySegments, setNearbySegments] = useState<NetworkSegment[]>([]);
   const [ratedCount, setRatedCount] = useState(0);
+  // True only while a NEWLY-started DataRanger trip waits for its first
+  // feature load. Resuming an existing trip skips the throbber — segments
+  // are already loaded from the previous session (or will appear silently
+  // when the next query completes).
+  const [isLoadingInitialFeatures, setIsLoadingInitialFeatures] = useState(false);
+  const hasLoadedInitialFeaturesRef = useRef(false);
 
   // Segment edit callout state
   const [selectedSegment, setSelectedSegment] = useState<NetworkSegment | null>(null);
@@ -110,8 +118,12 @@ export default function ActiveTripScreen() {
     SyncService.initialize();
   }, []);
 
-  // Start trip on component mount
+  // Start trip on component mount — runs exactly once (ref guard prevents re-fires
+  // when user/params/router change object reference on re-renders)
   useEffect(() => {
+    if (hasInitializedRef.current) return;
+    hasInitializedRef.current = true;
+
     const initializeTrip = async () => {
       if (!user) {
         setError('User not authenticated');
@@ -136,6 +148,12 @@ export default function ActiveTripScreen() {
 
       console.log('[ActiveTripScreen] Starting new trip:', { mode, comfort, purpose });
 
+      // Fresh DataRanger trip: gate the screen on the first feature load so
+      // the user doesn't see an empty map before curb ramps appear.
+      if (isDataRanger) {
+        setIsLoadingInitialFeatures(true);
+      }
+
       try {
         // Start trip via TripService
         const tripId = await TripService.startTrip(user.id, mode, comfort, purpose);
@@ -151,6 +169,7 @@ export default function ActiveTripScreen() {
         console.error('[ActiveTripScreen] Failed to start trip:', err);
         setError(err instanceof Error ? err.message : 'Failed to start trip');
         setIsLoading(false);
+        setIsLoadingInitialFeatures(false);
 
         // Show error alert and navigate back
         Alert.alert(
@@ -167,7 +186,8 @@ export default function ActiveTripScreen() {
     };
 
     initializeTrip();
-  }, [user, params, router]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Poll for trip updates (GPS coordinates, distance, duration)
   useEffect(() => {
@@ -311,10 +331,20 @@ export default function ActiveTripScreen() {
         const segments = DataRangerService.queryNearbySegments(lat, lon);
         setNearbySegments(segments);
       }
+
+      if (!hasLoadedInitialFeaturesRef.current) {
+        hasLoadedInitialFeaturesRef.current = true;
+        setIsLoadingInitialFeatures(false);
+      }
     };
 
     loadAndQuery();
   }, [userPosition, isDataRanger, isDataRangerReady, tripId]);
+
+  // If DataRanger mode is off, no feature load is needed — clear the throbber gate.
+  useEffect(() => {
+    if (!isDataRanger) setIsLoadingInitialFeatures(false);
+  }, [isDataRanger]);
 
   // DataRanger: handle segment tap from map
   const handleSegmentPress = useCallback((segment: NetworkSegment, facilityType: FacilityType) => {
@@ -722,11 +752,17 @@ export default function ActiveTripScreen() {
     return icons[mode.toLowerCase()] ?? 'navigate';
   };
 
-  // Show loading state
-  if (isLoading) {
+  // Show loading state — covers both trip creation and the initial DataRanger
+  // feature load. Holding the throbber until the first grid-cell load completes
+  // prevents the user from tapping curb ramps that aren't on screen yet.
+  if (isLoading || (isDataRanger && isLoadingInitialFeatures)) {
+    const label = isLoading
+      ? 'Starting trip…'
+      : 'Loading nearby features…';
     return (
       <View style={[StyleSheet.absoluteFillObject, styles.loadingContainer]} pointerEvents="none">
-        <ThemedText style={styles.loadingText}>Starting trip...</ThemedText>
+        <ActivityIndicator size="large" color={colors.tint} />
+        <ThemedText style={[styles.loadingText, { marginTop: 12 }]}>{label}</ThemedText>
       </View>
     );
   }

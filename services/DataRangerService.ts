@@ -6,7 +6,7 @@ import { Feature } from '@/components/MapViewComponent';
 import type { NetworkSegment, SegmentEdit, FacilityType, CurbRampSlot, GeometryEditPayload, GeometryEditRecord } from '@/services/types/NetworkSegment';
 import type { MapAdapter } from '@/services/rnMapboxAdapter';
 import { SegmentSpatialGrid } from '@/services/utils/SegmentSpatialGrid';
-import { getAllColumns, rowToNetworkSegment } from '@/services/utils/parquetToSegments';
+import { getRenderColumns, rowToNetworkSegment } from '@/services/utils/parquetToSegments';
 import { bboxToGridCells } from '@/services/utils/wgs84ToUtm';
 import { canGradeTrip } from '@/utils/timeValidation';
 
@@ -117,8 +117,13 @@ class DataRangerServiceClass {
 
       // Read metadata to get grid origin (reads only the footer from disk)
       const { parquetMetadataAsync } = await import('hyparquet/src/index.js');
-      const asyncBuffer = this.createFileAsyncBuffer();
-      const metadata = await parquetMetadataAsync(asyncBuffer);
+      const metaBuffer = this.createFileAsyncBuffer();
+      let metadata;
+      try {
+        metadata = await parquetMetadataAsync(metaBuffer);
+      } finally {
+        metaBuffer.close();
+      }
 
       // Extract grid origin from key-value metadata
       const originKv = metadata.key_value_metadata?.find(
@@ -127,7 +132,9 @@ class DataRangerServiceClass {
       if (originKv) {
         const raw = originKv.value as string | Uint8Array | undefined;
         const jsonStr = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : (raw ?? '');
-        this.gridOrigin = JSON.parse(jsonStr);
+        const parsed = JSON.parse(jsonStr) as { x: number; y: number; cell_size?: number; cellSize?: number };
+        // Parquet stores it as snake_case `cell_size`; normalize to camelCase.
+        this.gridOrigin = { x: parsed.x, y: parsed.y, cellSize: parsed.cell_size ?? parsed.cellSize ?? 500 };
         console.log('[DataRangerService] Grid origin:', this.gridOrigin);
       } else {
         throw new Error('Parquet missing proximity_grid_origin metadata — re-run the pipeline and re-upload.');
@@ -171,21 +178,23 @@ class DataRangerServiceClass {
    */
   private createFileAsyncBuffer() {
     const file = this.parquetFile!;
+    // Keep ONE file handle open for the lifetime of the buffer instead of
+    // open/close per slice. Each slice() typically reads a small column page;
+    // a 200-column row group triggers hundreds of slices and the syscall
+    // overhead from open/close was freezing the JS thread for seconds.
     const handle = file.open();
     const fileSize = handle.size!;
-    handle.close();
-    console.log(`[DataRangerService] File-backed AsyncBuffer: ${(fileSize / 1024 / 1024).toFixed(1)} MB`);
 
     return {
       byteLength: fileSize,
       slice(start: number, end?: number): Promise<ArrayBuffer> {
         const len = (end ?? fileSize) - start;
-        console.log(`[AsyncBuffer.slice] offset=${start} len=${len} (${(len / 1024 / 1024).toFixed(2)} MB)`);
-        const h = file.open();
-        h.offset = start;
-        const bytes = h.readBytes(len);
-        h.close();
+        handle.offset = start;
+        const bytes = handle.readBytes(len);
         return Promise.resolve(bytes.buffer);
+      },
+      close() {
+        try { handle.close(); } catch { /* ignore */ }
       },
     };
   }
@@ -289,59 +298,63 @@ class DataRangerServiceClass {
   private async buildGridCellIndex(): Promise<void> {
     const { parquetMetadataAsync, parquetRead } = await import('hyparquet/src/index.js');
     const asyncBuffer = this.createFileAsyncBuffer();
-    const metadata = await parquetMetadataAsync(asyncBuffer);
-    const rowGroups = metadata.row_groups ?? [];
+    try {
+      const metadata = await parquetMetadataAsync(asyncBuffer);
+      const rowGroups = metadata.row_groups ?? [];
 
-    this.gridCellIndex = new Map(); // cellKey → Set<rowGroupIndex>
+      this.gridCellIndex = new Map(); // cellKey → Set<rowGroupIndex>
 
-    // Compute cumulative row offsets so we can use rowStart/rowEnd per group.
-    let globalRowOffset = 0;
-    for (let rgIdx = 0; rgIdx < rowGroups.length; rgIdx++) {
-      const groupRows = Number(rowGroups[rgIdx].num_rows);
-      const rgStart = globalRowOffset;
-      globalRowOffset += groupRows;
+      // Compute cumulative row offsets so we can use rowStart/rowEnd per group.
+      let globalRowOffset = 0;
+      for (let rgIdx = 0; rgIdx < rowGroups.length; rgIdx++) {
+        const groupRows = Number(rowGroups[rgIdx].num_rows);
+        const rgStart = globalRowOffset;
+        globalRowOffset += groupRows;
 
-      const cellsInGroup = new Set<string>();
+        const cellsInGroup = new Set<string>();
 
-      // Read street_grid_id in small batches to keep peak allocation low.
-      // Parquet column chunks are stored per row group, but requesting a
-      // smaller rowStart/rowEnd range lets hyparquet decompress only the
-      // pages that overlap the range, avoiding a single 100 MB+ allocation.
-      for (let batchStart = rgStart; batchStart < rgStart + groupRows; batchStart += this.INDEX_BUILD_BATCH_SIZE) {
-        const batchEnd = Math.min(batchStart + this.INDEX_BUILD_BATCH_SIZE, rgStart + groupRows);
+        // Read street_grid_id in small batches to keep peak allocation low.
+        // Parquet column chunks are stored per row group, but requesting a
+        // smaller rowStart/rowEnd range lets hyparquet decompress only the
+        // pages that overlap the range, avoiding a single 100 MB+ allocation.
+        for (let batchStart = rgStart; batchStart < rgStart + groupRows; batchStart += this.INDEX_BUILD_BATCH_SIZE) {
+          const batchEnd = Math.min(batchStart + this.INDEX_BUILD_BATCH_SIZE, rgStart + groupRows);
 
-        await new Promise<void>((resolve, reject) => {
-          parquetRead({
-            file: asyncBuffer,
-            metadata,
-            columns: ['street_grid_id'],
-            rowStart: batchStart,
-            rowEnd: batchEnd,
-            onChunk: (chunk: any) => {
-              const data: unknown[] = chunk.columnData ?? [];
-              for (const v of data) {
-                if (typeof v !== 'string') continue;
-                const parts = v.split('_');
-                if (parts.length >= 2) {
-                  cellsInGroup.add(`${parts[0]}_${parts[1]}`);
+          await new Promise<void>((resolve, reject) => {
+            parquetRead({
+              file: asyncBuffer,
+              metadata,
+              columns: ['street_grid_id'],
+              rowStart: batchStart,
+              rowEnd: batchEnd,
+              onChunk: (chunk: any) => {
+                const data: unknown[] = chunk.columnData ?? [];
+                for (const v of data) {
+                  if (typeof v !== 'string') continue;
+                  const parts = v.split('_');
+                  if (parts.length >= 2) {
+                    cellsInGroup.add(`${parts[0]}_${parts[1]}`);
+                  }
                 }
-              }
-            },
-          }).then(resolve).catch(reject);
-        });
-      }
+              },
+            }).then(resolve).catch(reject);
+          });
+        }
 
-      for (const cellKey of cellsInGroup) {
-        const existing = this.gridCellIndex.get(cellKey);
-        if (existing) {
-          existing.add(rgIdx);
-        } else {
-          this.gridCellIndex.set(cellKey, new Set([rgIdx]));
+        for (const cellKey of cellsInGroup) {
+          const existing = this.gridCellIndex.get(cellKey);
+          if (existing) {
+            existing.add(rgIdx);
+          } else {
+            this.gridCellIndex.set(cellKey, new Set([rgIdx]));
+          }
         }
       }
-    }
 
-    console.log(`[DataRangerService] Grid cell index built: ${this.gridCellIndex.size} cells across ${rowGroups.length} row groups`);
+      console.log(`[DataRangerService] Grid cell index built: ${this.gridCellIndex.size} cells across ${rowGroups.length} row groups`);
+    } finally {
+      asyncBuffer.close();
+    }
   }
 
   /**
@@ -430,10 +443,11 @@ class DataRangerServiceClass {
     console.log(`[DataRangerService] Loading ${cellsToLoad.length} grid cells from ${neededRowGroups.size} row groups`);
     for (const cellKey of cellsToLoad) this.loadingCells.add(cellKey);
 
+    let asyncBuffer: ReturnType<DataRangerServiceClass['createFileAsyncBuffer']> | null = null;
     try {
       const { parquetMetadataAsync, parquetReadObjects } = await import('hyparquet/src/index.js');
-      const asyncBuffer = this.createFileAsyncBuffer();
-      const columns = getAllColumns();
+      asyncBuffer = this.createFileAsyncBuffer();
+      const columns = getRenderColumns();
       const neededCellSet = new Set(cellsToLoad);
 
       // Read metadata once so we can compute per-row-group row ranges.
@@ -495,13 +509,20 @@ class DataRangerServiceClass {
     } catch (err) {
       for (const cellKey of cellsToLoad) this.loadingCells.delete(cellKey);
       console.warn('[DataRangerService] loadGridCellsForBbox failed:', err);
+    } finally {
+      asyncBuffer?.close();
     }
   }
 
   /**
    * Load grid cells near a point (for position-based queries).
+   *
+   * Default radius matches the visualization query radius (50 m) plus a small
+   * buffer for segments whose `street_grid_id` is in a neighboring cell but
+   * whose geometry extends within range. Loading larger bboxes (e.g. 500 m)
+   * pulled in 9 cells / thousands of segments per query and froze the JS thread.
    */
-  async loadGridCellsNearPoint(lat: number, lon: number, radiusM: number = 500): Promise<void> {
+  async loadGridCellsNearPoint(lat: number, lon: number, radiusM: number = 80): Promise<void> {
     const latDelta = radiusM / 111320;
     const lonDelta = radiusM / (111320 * Math.cos(lat * Math.PI / 180));
     await this.loadGridCellsForBbox({

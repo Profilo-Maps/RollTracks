@@ -156,19 +156,106 @@ export function getAllColumns(): string[] {
   return [...new Set(cols)]; // deduplicate
 }
 
-// --- Geometry helpers ---
-
-/** Decode a WKB hex string and convert from UTM to WGS84. */
-function decodeGeom(hexOrNull: string | null | undefined): Geometry | null {
-  const geom = wkbToGeoJSON(hexOrNull);
-  if (!geom) return null;
-  return convertGeometryToWgs84(geom);
+/**
+ * Minimal column set for on-device rendering (sidewalks, bikeways, curb ramps,
+ * traffic calming, plus the street centerline used by the spatial index).
+ * Skips crosswalk columns (hidden in rendering), public_data_id_* (unused at
+ * runtime), street-level metadata, and other attribute columns we never display.
+ *
+ * Trimming from ~220 columns to ~70 keeps peak page reads / JS allocations
+ * roughly 3× smaller and dropped the UI freeze on row-group load.
+ */
+export function getRenderColumns(): string[] {
+  const cols = [
+    'street_grid_id',
+    'street_geometry', // required: rowToNetworkSegment returns null without it; spatial index uses it
+    'street_feature_types', 'street_feature_geometry', 'street_feature_attributes', // traffic calming
+    // Sidewalk lines
+    ...['left', 'right'].flatMap(side => [
+      `sidewalk_${side}_ID`,
+      `sidewalk_${side}_geometry`,
+      `sidewalk_${side}_buffered`,
+      `sidewalk_${side}_presence`,
+    ]),
+    // Curb ramps (ID + geometry + the 3 attributes shown in the rating modal)
+    ...['left', 'right'].flatMap(side =>
+      ['start', 'end'].flatMap(pos =>
+        [1, 2, 3].flatMap(n => [
+          `sidewalk_${side}_curbramp_${pos}_${n}_ID`,
+          `sidewalk_${side}_curbramp_${pos}_${n}_geometry`,
+          `sidewalk_${side}_curbramp_${pos}_${n}_returnloc`,
+          `sidewalk_${side}_curbramp_${pos}_${n}_returnposition`,
+          `sidewalk_${side}_curbramp_${pos}_${n}_condition_score`,
+        ])
+      )
+    ),
+    // Bikeway lines
+    ...['left', 'right'].flatMap(side =>
+      [1, 2].flatMap(n => [
+        `bikeway_${side}_${n}_id`,
+        `bikeway_${side}_${n}_geometry`,
+        `bikeway_${side}_${n}_buffered`,
+      ])
+    ),
+  ];
+  return [...new Set(cols)];
 }
 
-/** Convert hyparquet's auto-decoded GeoParquet geometry from UTM to WGS84. */
+// --- Geometry helpers ---
+
+/**
+ * Heuristic: detect whether a coordinate pair is already in WGS84
+ * (lon in [-180, 180], lat in [-90, 90]) vs. UTM (eastings/northings in the
+ * hundreds of thousands). The current parquet stores GeoParquet WGS84 directly;
+ * older builds shipped UTM that needed conversion. We keep both paths so older
+ * cached parquet files still render correctly.
+ */
+function isLikelyWgs84(coord: unknown): boolean {
+  if (!Array.isArray(coord)) return false;
+  const [x, y] = coord as [unknown, unknown];
+  return typeof x === 'number' && typeof y === 'number'
+    && x >= -180 && x <= 180 && y >= -90 && y <= 90;
+}
+
+function firstCoord(geom: Geometry): unknown {
+  switch (geom.type) {
+    case 'Point': return geom.coordinates;
+    case 'LineString':
+    case 'MultiPoint': return geom.coordinates[0];
+    case 'MultiLineString':
+    case 'Polygon': return geom.coordinates[0]?.[0];
+    case 'MultiPolygon': return geom.coordinates[0]?.[0]?.[0];
+    default: return null;
+  }
+}
+
+function maybeConvertToWgs84(geom: Geometry): Geometry {
+  return isLikelyWgs84(firstCoord(geom)) ? geom : convertGeometryToWgs84(geom);
+}
+
+/**
+ * Decode a geometry value from the parquet. Newer parquet builds store
+ * geometries as already-decoded GeoJSON objects (in WGS84); older builds
+ * stored WKB hex strings (in UTM). Accept all three forms and skip the UTM
+ * conversion when coordinates are already in WGS84 range.
+ */
+function decodeGeom(input: string | Uint8Array | Geometry | null | undefined): Geometry | null {
+  if (input == null) return null;
+  // GeoJSON object passthrough — hyparquet decodes BYTE_ARRAY geometry columns
+  // directly when the parquet is written with the GeoParquet metadata.
+  if (typeof input === 'object' && !ArrayBuffer.isView(input) && !(input instanceof ArrayBuffer)) {
+    const g = input as Geometry;
+    if (g.type) return maybeConvertToWgs84(g);
+  }
+  const geom = wkbToGeoJSON(input as string | Uint8Array);
+  if (!geom) return null;
+  return maybeConvertToWgs84(geom);
+}
+
+/** Convert hyparquet's auto-decoded GeoParquet geometry to WGS84 if necessary. */
 function convertAutoDecodedGeom(geom: Geometry | null | undefined): Geometry | null {
   if (!geom) return null;
-  return convertGeometryToWgs84(geom);
+  return maybeConvertToWgs84(geom);
 }
 
 function asLineString(geom: Geometry | null): LineString | null {

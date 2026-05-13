@@ -130,22 +130,43 @@ function hexToBuffer(hex: string): ArrayBuffer {
 }
 
 /**
- * Decode a WKB hex string into a GeoJSON Geometry.
- * Returns null for null, undefined, or empty inputs.
+ * Decode a WKB value into a GeoJSON Geometry. Accepts either a hex string
+ * (legacy parquet output) or a raw `Uint8Array` (newer hyparquet versions
+ * return BYTE_ARRAY columns this way). Returns null for null / undefined /
+ * empty inputs.
  *
  * Supports: Point, LineString, MultiPoint, MultiLineString.
  */
-export function wkbToGeoJSON(hexString: string | null | undefined): Geometry | null {
-  if (!hexString || hexString.length === 0) {
-    return null;
-  }
+let _diagOnce = false;
+
+export function wkbToGeoJSON(input: string | Uint8Array | ArrayBuffer | null | undefined): Geometry | null {
+  if (input == null) return null;
 
   try {
-    const buffer = hexToBuffer(hexString);
+    let buffer: ArrayBuffer;
+    if (typeof input === 'string') {
+      if (input.length === 0) return null;
+      buffer = hexToBuffer(input);
+    } else if (input instanceof ArrayBuffer) {
+      if (input.byteLength === 0) return null;
+      buffer = input;
+    } else if (ArrayBuffer.isView(input)) {
+      const view = input as ArrayBufferView;
+      if (view.byteLength === 0) return null;
+      buffer = view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+    } else {
+      if (!_diagOnce) {
+        _diagOnce = true;
+        console.warn('[wkbToGeoJSON] Unexpected input type:', typeof input,
+          'ctor:', (input as { constructor?: { name?: string } }).constructor?.name,
+          'sample:', input);
+      }
+      return null;
+    }
     const reader = new WKBReader(buffer);
     return reader.readGeometry();
   } catch (error) {
-    console.warn('[wkbToGeoJSON] Failed to decode WKB hex:', error);
+    console.warn('[wkbToGeoJSON] Failed to decode WKB:', error);
     return null;
   }
 }
